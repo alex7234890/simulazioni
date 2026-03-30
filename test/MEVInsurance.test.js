@@ -2,15 +2,16 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
-describe("MEVInsurance", function () {
+describe("MEVInsurance (Legacy Interface)", function () {
   let token;
   let insurance;
+  let registry;
   let owner;
   let user1;
   let user2;
 
   const PREMIUM = ethers.parseEther("100");
-  const COVERAGE = ethers.parseEther("1000");
+  const CoverageLevel = { Low: 0, Medium: 1, High: 2 };
 
   beforeEach(async function () {
     [owner, user1, user2] = await ethers.getSigners();
@@ -20,9 +21,17 @@ describe("MEVInsurance", function () {
     token = await MEVToken.deploy();
     await token.waitForDeployment();
 
-    // Deploy insurance
+    // Deploy oracle registry
+    const OracleRegistry = await ethers.getContractFactory("OracleRegistry");
+    registry = await OracleRegistry.deploy();
+    await registry.waitForDeployment();
+
+    // Deploy insurance (now takes token + oracle registry)
     const MEVInsurance = await ethers.getContractFactory("MEVInsurance");
-    insurance = await MEVInsurance.deploy(await token.getAddress());
+    insurance = await MEVInsurance.deploy(
+      await token.getAddress(),
+      await registry.getAddress()
+    );
     await insurance.waitForDeployment();
 
     // Give user1 tokens for premium and approve
@@ -59,15 +68,14 @@ describe("MEVInsurance", function () {
     });
 
     it("should allow registered user to buy a policy", async function () {
-      await insurance.connect(user1).buyPolicy();
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
       const policy = await insurance.policies(user1.address);
       expect(policy.active).to.be.true;
-      expect(policy.coverageRemaining).to.equal(COVERAGE);
     });
 
     it("should deduct premium from user", async function () {
       const balanceBefore = await token.balanceOf(user1.address);
-      await insurance.connect(user1).buyPolicy();
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
       const balanceAfter = await token.balanceOf(user1.address);
       expect(balanceBefore - balanceAfter).to.equal(PREMIUM);
     });
@@ -75,95 +83,27 @@ describe("MEVInsurance", function () {
     it("should revert if not registered", async function () {
       await token.connect(user2).approve(await insurance.getAddress(), PREMIUM);
       await expect(
-        insurance.connect(user2).buyPolicy()
+        insurance.connect(user2).buyPolicy(CoverageLevel.High)
       ).to.be.revertedWith("Not registered");
     });
 
     it("should revert if policy already active", async function () {
-      await insurance.connect(user1).buyPolicy();
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
       await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
       await expect(
-        insurance.connect(user1).buyPolicy()
+        insurance.connect(user1).buyPolicy(CoverageLevel.High)
       ).to.be.revertedWith("Policy already active");
     });
   });
 
-  describe("Submit Claim", function () {
-    beforeEach(async function () {
-      await insurance.connect(user1).registerUser();
-      await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
-      await insurance.connect(user1).buyPolicy();
+  describe("View Functions", function () {
+    it("should return claims count of 0 initially", async function () {
+      expect(await insurance.getClaimsCount()).to.equal(0);
     });
 
-    it("should submit a valid claim", async function () {
-      const amount = ethers.parseEther("50");
-      await insurance.connect(user1).submitClaim(amount, "Sandwich attack on swap");
-
-      expect(await insurance.getClaimsCount()).to.equal(1);
-      const claim = await insurance.claims(0);
-      expect(claim.claimant).to.equal(user1.address);
-      expect(claim.amount).to.equal(amount);
-    });
-
-    it("should revert if no active policy", async function () {
-      const amount = ethers.parseEther("50");
-      await expect(
-        insurance.connect(user2).submitClaim(amount, "Attack")
-      ).to.be.revertedWith("No active policy");
-    });
-
-    it("should revert if claim exceeds coverage", async function () {
-      const amount = ethers.parseEther("1001");
-      await expect(
-        insurance.connect(user1).submitClaim(amount, "Attack")
-      ).to.be.revertedWith("Invalid claim amount");
-    });
-
-    it("should revert if policy expired", async function () {
-      // Advance time past 30 days
-      await time.increase(31 * 24 * 60 * 60);
-      const amount = ethers.parseEther("50");
-      await expect(
-        insurance.connect(user1).submitClaim(amount, "Attack")
-      ).to.be.revertedWith("Policy expired");
-    });
-  });
-
-  describe("Approve / Reject Claims", function () {
-    beforeEach(async function () {
-      await insurance.connect(user1).registerUser();
-      await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
-      await insurance.connect(user1).buyPolicy();
-      await insurance.connect(user1).submitClaim(ethers.parseEther("200"), "MEV sandwich");
-    });
-
-    it("should approve a claim and pay out", async function () {
-      const balanceBefore = await token.balanceOf(user1.address);
-      await insurance.approveClaim(0);
-      const balanceAfter = await token.balanceOf(user1.address);
-
-      expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther("200"));
-
-      const claim = await insurance.claims(0);
-      expect(claim.status).to.equal(1); // Approved
-    });
-
-    it("should reduce coverage remaining after approval", async function () {
-      await insurance.approveClaim(0);
-      const policy = await insurance.policies(user1.address);
-      expect(policy.coverageRemaining).to.equal(ethers.parseEther("800"));
-    });
-
-    it("should reject a claim", async function () {
-      await insurance.rejectClaim(0);
-      const claim = await insurance.claims(0);
-      expect(claim.status).to.equal(2); // Rejected
-    });
-
-    it("should revert if non-owner tries to approve", async function () {
-      await expect(
-        insurance.connect(user1).approveClaim(0)
-      ).to.be.revertedWithCustomError(insurance, "OwnableUnauthorizedAccount");
+    it("should return empty user claims initially", async function () {
+      const claims = await insurance.getUserClaims(user1.address);
+      expect(claims.length).to.equal(0);
     });
   });
 });

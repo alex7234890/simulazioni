@@ -38,12 +38,35 @@
    - All protocol parameters configurable by owner
    - 46 unit tests passing
 
+6. **Phase 3: ClaimManager (MEVInsurance.sol refactor)**
+   - Complete rewrite of MEVInsurance.sol with commit-reveal oracle evaluation
+   - Constructor now takes token + OracleRegistry addresses
+   - User registration with Bronze tier default, registered users mapping
+   - Policy purchase with CoverageLevel (Low/Medium/High) selection
+   - submitClaim(): 3 tx hashes + swapValue + loss, auto-selects 7 oracles via OracleRegistry
+   - Daily swap limits per tier (Bronze/Silver: 3, Gold: 4, Platinum: unlimited)
+   - commitVerdict(): oracle submits keccak256(fraudScore, patternValid, salt) hash
+   - revealVerdict(): oracle reveals score + pattern validity, verified against commit
+   - finalizeClaim(): full decision logic:
+     - Pattern invalidity check (>=70% invalid votes -> immediate rejection)
+     - Median fraud score calculation (insertion sort)
+     - Dispersione (max-min) tracking
+     - Tier-based thresholds: Bronze/Silver (CAPTCHA or blacklist), Gold/Platinum (approve, CAPTCHA, or blacklist)
+   - resolveCAPTCHA(): owner resolves CAPTCHA-required claims
+   - Coverage payouts: Low=70%, Medium=90%, High=100% of claimed loss
+   - Blacklist system with 20% penalty debt on rejected claims
+   - Running average fraud score per user
+   - Oracle timeout (3 days) allows finalization with partial reveals
+   - All parameters configurable by owner
+   - 56 new tests (ClaimManager.test.js) + 9 updated legacy tests
+   - Total: 133/133 tests passing
+
 ## Current Architecture
 
 ```
 contracts/
   MEVToken.sol                  - ERC20 token (MEVI, 1M supply)
-  MEVInsurance.sol              - Insurance contract (base version)
+  MEVInsurance.sol              - Insurance contract (Phase 3: full ClaimManager)
   OracleRegistry.sol            - Oracle management (register, activate, select, slash)
   libraries/
     DataTypes.sol               - Shared enums and structs
@@ -56,7 +79,8 @@ scripts/
   oracle.py                     - Oracle service (placeholder)
 test/
   MEVToken.test.js              - Token unit tests (8 tests)
-  MEVInsurance.test.js          - Insurance unit tests (15 tests)
+  MEVInsurance.test.js          - Insurance legacy tests (9 tests)
+  ClaimManager.test.js          - ClaimManager full tests (56 tests)
   DataTypes.test.js             - DataTypes unit tests (12 tests)
   OracleRegistry.test.js        - Oracle registry tests (46 tests)
 logs/
@@ -73,15 +97,16 @@ logs/
 
 ## Last Changes
 
-- Created contracts/OracleRegistry.sol with full oracle lifecycle
-- Created test/OracleRegistry.test.js with 46 tests
-- Total: 81/81 tests passing
+- Refactored contracts/MEVInsurance.sol: full ClaimManager with commit-reveal oracle system
+- Created test/ClaimManager.test.js with 56 tests
+- Updated test/MEVInsurance.test.js for new contract interface (9 tests)
+- Total: 133/133 tests passing
 
 ## Next Tasks (Phases)
 
 1. ~~Phase 1: Data structures and types~~ DONE
 2. ~~Phase 2: OracleRegistry.sol~~ DONE
-3. Phase 3: ClaimManager (refactor MEVInsurance.sol)
+3. ~~Phase 3: ClaimManager (refactor MEVInsurance.sol)~~ DONE
 4. Phase 4: PremiumCalculator.sol
 5. Phase 5: TierSystem.sol
 6. Phase 6: SlashingSystem.sol
