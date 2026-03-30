@@ -21,13 +21,22 @@
 
 4. **Phase 1: Data Structures and Types (DataTypes.sol)**
    - Created contracts/libraries/DataTypes.sol with all shared types
-   - Enums: Tier (Bronze/Silver/Gold/Platinum), CoverageLevel (Low/Medium/High),
-     ClaimStatus (6 states), OracleStatus (7 states)
-   - Structs: UserProfile, OracleInfo, Claim (with commit-reveal fields), Policy
+   - Enums: Tier, CoverageLevel, ClaimStatus (6 states), OracleStatus (7 states)
+   - Structs: UserProfile, OracleInfo, Claim, Policy
    - All numeric percentages in basis points (10000 = 100%)
-   - Created DataTypesConsumer.sol test helper
-   - 12 unit tests passing for DataTypes
-   - Enabled viaIR compiler with optimizer for stack-depth support
+   - 12 unit tests passing
+
+5. **Phase 2: OracleRegistry.sol**
+   - Full oracle lifecycle: register -> activate -> withdraw
+   - Logarithmic stake scaling: baseStake * log2(1 + activeOracleCount)
+   - Activation delay (7 days), withdrawal cooldown (30 days)
+   - Deviation tracking & automatic watchlisting (after 2 deviations)
+   - Periodic deviation score reset (every 30 days)
+   - Pseudo-random oracle selection (Fisher-Yates), excludes watchlisted + withdrawing
+   - Reward system with 50% penalty for watchlisted oracles
+   - Slashing, expulsion, and reintegration support
+   - All protocol parameters configurable by owner
+   - 46 unit tests passing
 
 ## Current Architecture
 
@@ -35,6 +44,7 @@
 contracts/
   MEVToken.sol                  - ERC20 token (MEVI, 1M supply)
   MEVInsurance.sol              - Insurance contract (base version)
+  OracleRegistry.sol            - Oracle management (register, activate, select, slash)
   libraries/
     DataTypes.sol               - Shared enums and structs
   test/
@@ -48,13 +58,14 @@ test/
   MEVToken.test.js              - Token unit tests (8 tests)
   MEVInsurance.test.js          - Insurance unit tests (15 tests)
   DataTypes.test.js             - DataTypes unit tests (12 tests)
+  OracleRegistry.test.js        - Oracle registry tests (46 tests)
 logs/
   project_log.md                - This file
 ```
 
 ## Tech Stack
 
-- **Smart Contracts:** Solidity 0.8.20, OpenZeppelin ERC20 + Ownable
+- **Smart Contracts:** Solidity 0.8.20, OpenZeppelin ERC20 + Ownable + ReentrancyGuard
 - **Compiler:** viaIR enabled, optimizer 200 runs
 - **Framework:** Hardhat 2.28.6
 - **Python:** web3.py, eth-account
@@ -62,16 +73,14 @@ logs/
 
 ## Last Changes
 
-- Created contracts/libraries/DataTypes.sol with all protocol types
-- Created contracts/test/DataTypesConsumer.sol for testing
-- Created test/DataTypes.test.js with 12 tests
-- Enabled viaIR + optimizer in hardhat.config.js
-- Total: 35/35 tests passing
+- Created contracts/OracleRegistry.sol with full oracle lifecycle
+- Created test/OracleRegistry.test.js with 46 tests
+- Total: 81/81 tests passing
 
 ## Next Tasks (Phases)
 
 1. ~~Phase 1: Data structures and types~~ DONE
-2. Phase 2: OracleRegistry.sol
+2. ~~Phase 2: OracleRegistry.sol~~ DONE
 3. Phase 3: ClaimManager (refactor MEVInsurance.sol)
 4. Phase 4: PremiumCalculator.sol
 5. Phase 5: TierSystem.sol
