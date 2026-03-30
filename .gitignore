@@ -1,0 +1,8 @@
+node_modules/
+cache/
+artifacts/
+coverage/
+typechain-types/
+.env
+*.pyc
+__pycache__/
