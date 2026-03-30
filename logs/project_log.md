@@ -11,54 +11,74 @@
 2. **ERC20 Token (MEVToken.sol)**
    - Created MEV Insurance Token (MEVI) with 1,000,000 supply
    - Mints full supply to deployer
-   - All 8 unit tests passing (deployment, transfers, allowances)
+   - 8 unit tests passing (deployment, transfers, allowances)
    - Deployment script verified working
 
-3. **MEVInsurance Contract**
+3. **MEVInsurance Contract (base)**
    - Created MEVInsurance.sol with registerUser(), buyPolicy(), submitClaim()
    - Premium: 100 MEVI, Coverage: 1000 MEVI, Duration: 30 days
    - 15 unit tests passing (registration, policy purchase, claims, approvals)
+
+4. **Phase 1: Data Structures and Types (DataTypes.sol)**
+   - Created contracts/libraries/DataTypes.sol with all shared types
+   - Enums: Tier (Bronze/Silver/Gold/Platinum), CoverageLevel (Low/Medium/High),
+     ClaimStatus (6 states), OracleStatus (7 states)
+   - Structs: UserProfile, OracleInfo, Claim (with commit-reveal fields), Policy
+   - All numeric percentages in basis points (10000 = 100%)
+   - Created DataTypesConsumer.sol test helper
+   - 12 unit tests passing for DataTypes
+   - Enabled viaIR compiler with optimizer for stack-depth support
 
 ## Current Architecture
 
 ```
 contracts/
-  MEVToken.sol          - ERC20 token (MEVI, 1M supply)
-  MEVInsurance.sol      - Insurance contract (register, buy policy, submit claims)
+  MEVToken.sol                  - ERC20 token (MEVI, 1M supply)
+  MEVInsurance.sol              - Insurance contract (base version)
+  libraries/
+    DataTypes.sol               - Shared enums and structs
+  test/
+    DataTypesConsumer.sol       - Test helper for DataTypes
 scripts/
-  deploy_token.js       - Deploy MEVToken to network
-  trader.py             - Trader simulator (placeholder)
-  mev_bot.py            - MEV bot simulator (placeholder)
-  oracle.py             - Oracle service (placeholder)
+  deploy_token.js               - Deploy MEVToken to network
+  trader.py                     - Trader simulator (placeholder)
+  mev_bot.py                    - MEV bot simulator (placeholder)
+  oracle.py                     - Oracle service (placeholder)
 test/
-  MEVToken.test.js      - Token unit tests (8 tests)
-  MEVInsurance.test.js  - Insurance unit tests
+  MEVToken.test.js              - Token unit tests (8 tests)
+  MEVInsurance.test.js          - Insurance unit tests (15 tests)
+  DataTypes.test.js             - DataTypes unit tests (12 tests)
 logs/
-  project_log.md        - This file
+  project_log.md                - This file
 ```
 
 ## Tech Stack
 
-- **Smart Contracts:** Solidity 0.8.20, OpenZeppelin ERC20
+- **Smart Contracts:** Solidity 0.8.20, OpenZeppelin ERC20 + Ownable
+- **Compiler:** viaIR enabled, optimizer 200 runs
 - **Framework:** Hardhat 2.28.6
 - **Python:** web3.py, eth-account
 - **Networks:** Hardhat local (chainId 31337), Sepolia (planned)
 
 ## Last Changes
 
-- Initialized project with Hardhat 2 + OpenZeppelin
-- Created and tested MEVToken.sol (8/8 tests passing)
-- Created MEVInsurance.sol with registerUser, buyPolicy, submitClaim
-- Created placeholder Python scripts (trader, mev_bot, oracle)
+- Created contracts/libraries/DataTypes.sol with all protocol types
+- Created contracts/test/DataTypesConsumer.sol for testing
+- Created test/DataTypes.test.js with 12 tests
+- Enabled viaIR + optimizer in hardhat.config.js
+- Total: 35/35 tests passing
 
-## Next Tasks
+## Next Tasks (Phases)
 
-1. Create MockAMM contract
-2. Implement trader simulator (Python)
-3. Implement MEV bot simulator (Python)
-4. Implement oracle service (Python)
-5. Local blockchain simulation with all components
-6. Sepolia testnet deployment
+1. ~~Phase 1: Data structures and types~~ DONE
+2. Phase 2: OracleRegistry.sol
+3. Phase 3: ClaimManager (refactor MEVInsurance.sol)
+4. Phase 4: PremiumCalculator.sol
+5. Phase 5: TierSystem.sol
+6. Phase 6: SlashingSystem.sol
+7. Phase 7: SandwichBot.sol + MockAMM.sol
+8. Phase 8: End-to-end test
+9. Phase 9: Patt update mechanism
 
 ## How to Run
 
