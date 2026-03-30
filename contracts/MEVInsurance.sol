@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./libraries/DataTypes.sol";
 import "./OracleRegistry.sol";
+import "./PremiumCalculator.sol";
 
 /**
  * @title MEVInsurance
@@ -30,6 +31,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
 
     IERC20 public token;
     OracleRegistry public oracleRegistry;
+    PremiumCalculator public premiumCalculator;
 
     // -------------------------------------------------------
     //  Protocol Parameters (configurable, Table 8 defaults)
@@ -176,7 +178,13 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         require(!policies[msg.sender].active, "Policy already active");
         require(!userProfiles[msg.sender].isBlacklisted, "User is blacklisted");
 
-        uint256 premium = defaultPremium;
+        uint256 premium;
+        if (address(premiumCalculator) != address(0)) {
+            premium = premiumCalculator.calculatePremium(defaultCoverage, _coverageLevel);
+            if (premium == 0) premium = defaultPremium;
+        } else {
+            premium = defaultPremium;
+        }
         uint256 start = block.timestamp;
         uint256 end = start + policyDuration;
 
@@ -548,6 +556,11 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     function setDefaultCoverage(uint256 _val) external onlyOwner {
         defaultCoverage = _val;
         emit ParameterUpdated("defaultCoverage", _val);
+    }
+
+    function setPremiumCalculator(address _calculator) external onlyOwner {
+        premiumCalculator = PremiumCalculator(_calculator);
+        emit ParameterUpdated("premiumCalculator", uint256(uint160(_calculator)));
     }
 
     function setOracleTimeout(uint256 _val) external onlyOwner {
