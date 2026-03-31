@@ -131,6 +131,20 @@
    - 17 new tests (E2E.test.js)
    - Total: 332/332 tests passing
 
+12. **Phase 9: PattUpdater.sol (Patt Update Mechanism)**
+   - Oracle-driven periodic update of Patt (probability of attack) in PremiumCalculator
+   - startPattUpdate(): selects Noracle_patt=5 oracles, starts commit phase
+   - Commit-reveal: oracles estimate attack ratio in basis points (0-10000)
+   - finalizePattUpdate(): median + safety margin ms (200 bps), writes to PremiumCalculator
+   - Rclaim (0.002 ETH) reward per oracle that revealed
+   - Update interval enforced (default 1 day)
+   - Support for partial reveals after timeout
+   - Cap at 10000 bps (100%)
+   - Sequential rounds supported
+   - PremiumCalculator ownership transferred to PattUpdater
+   - 46 new tests (PattUpdater.test.js)
+   - Total: 378/378 tests passing
+
 ## Current Architecture
 
 ```
@@ -144,6 +158,7 @@ contracts/
   SandwichBot.sol               - MEV sandwich attack simulator (frontrun/backrun)
   MockAMM.sol                   - Constant product AMM (x*y=k) for simulation
   MockUSDC.sol                  - ERC20 mock quote token
+  PattUpdater.sol               - Periodic Patt update via oracle consensus
   libraries/
     DataTypes.sol               - Shared enums and structs
   test/
@@ -164,6 +179,7 @@ test/
   SlashingSystem.test.js         - Slashing system tests (46 tests)
   SandwichBot.test.js            - Sandwich attack + AMM tests (29 tests)
   E2E.test.js                    - End-to-end integration tests (17 tests)
+  PattUpdater.test.js            - Patt update mechanism tests (46 tests)
 logs/
   project_log.md                - This file
 ```
@@ -178,9 +194,10 @@ logs/
 
 ## Last Changes
 
-- Created test/E2E.test.js with 17 end-to-end integration tests
-- All 9 contracts wired together and tested as complete protocol
-- Total: 332/332 tests passing
+- Created contracts/PattUpdater.sol with oracle commit-reveal Patt estimation
+- Created test/PattUpdater.test.js with 46 tests
+- All 10 contracts wired together and tested
+- Total: 378/378 tests passing
 
 ## Next Tasks (Phases)
 
@@ -192,7 +209,9 @@ logs/
 6. ~~Phase 6: SlashingSystem.sol~~ DONE
 7. ~~Phase 7: SandwichBot.sol + MockAMM.sol~~ DONE
 8. ~~Phase 8: End-to-end test~~ DONE
-9. Phase 9: Patt update mechanism
+9. ~~Phase 9: Patt update mechanism~~ DONE
+
+ALL 9 PHASES COMPLETE.
 
 ## How to Run
 
