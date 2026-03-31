@@ -194,10 +194,14 @@ logs/
 
 ## Last Changes
 
-- Created contracts/PattUpdater.sol with oracle commit-reveal Patt estimation
-- Created test/PattUpdater.test.js with 46 tests
-- All 10 contracts wired together and tested
-- Total: 378/378 tests passing
+- **Correction 1: Premium per-swap, not per-policy**
+  - buyPolicy() now charges only a symbolic activation fee (1 MEVI) instead of the full premium
+  - New insuredSwap(swapValue) function: calculates premium via PremiumCalculator and charges per swap
+  - submitClaim() now takes a swapId parameter referencing a previously insured swap
+  - Added InsuredSwap struct to DataTypes.sol
+  - Daily swap limits moved from submitClaim to insuredSwap
+  - Updated all tests (ClaimManager, MEVInsurance, E2E, PremiumCalculator)
+  - Total: 379/379 tests passing (+1 new test for "swap already claimed")
 
 ## Next Tasks (Phases)
 
@@ -212,6 +216,22 @@ logs/
 9. ~~Phase 9: Patt update mechanism~~ DONE
 
 ALL 9 PHASES COMPLETE.
+
+## Corrections (PDF Alignment)
+
+1. ~~Correzione 1: Premium per-swap~~ DONE
+2. Correzione 2: Coverage percentages (Low=50%, Medium=70%, High=100%)
+3. Correzione 3: Separare Fcov (premium) da coverage% (rimborso)
+4. Correzione 4: FraudScore range 0-130, θapprove=60, θreject=80
+5. Correzione 5: Reward oracle in finalizeClaim
+6. Correzione 6: Margine ms variabile nel PattUpdater
+7. Correzione 7: Revisione secondaria per alta dispersione
+8. Correzione 8: Score scostamento come somma cumulativa
+9. Correzione 9: Blacklist bot MEV
+10. Correzione 10: Penalità inattività oracle
+11. Correzione 11: Twatchlist periodo minimo osservazione
+12. Correzione 12: Dataset commitment nel PattUpdater
+13. Correzione 13: Rimborso gas per claim approvati
 
 ## How to Run
 

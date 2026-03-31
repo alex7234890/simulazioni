@@ -7,7 +7,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
   let owner, user1, user2;
   let oracle1, oracle2, oracle3, oracle4, oracle5, oracle6, oracle7;
 
-  const PREMIUM = ethers.parseEther("100");
+  const ACTIVATION_FEE = ethers.parseEther("1");
   const BASE_STAKE = ethers.parseEther("0.1");
   const T_ACTIVATION = 7 * 24 * 60 * 60;
   const ORACLE_TIMEOUT = 3 * 24 * 60 * 60;
@@ -43,11 +43,11 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
   async function setupUserWithPolicy(user, coverageLevel = CoverageLevel.High) {
     await insurance.connect(user).registerUser();
     await token.transfer(user.address, ethers.parseEther("500"));
-    await token.connect(user).approve(await insurance.getAddress(), PREMIUM);
+    await token.connect(user).approve(await insurance.getAddress(), ethers.parseEther("500"));
     await insurance.connect(user).buyPolicy(coverageLevel);
   }
 
-  // Helper: submit a claim and return claim ID and assigned oracles
+  // Helper: insure a swap and submit a claim, return claim ID and assigned oracles
   async function submitClaimAndGetOracles(user) {
     const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
     const tx2 = ethers.keccak256(ethers.toUtf8Bytes("victim"));
@@ -55,11 +55,16 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
     const swapValue = ethers.parseEther("500");
     const loss = ethers.parseEther("50");
 
-    const tx = await insurance.connect(user).submitClaim(tx1, tx2, tx3, swapValue, loss);
+    // First insure the swap
+    await insurance.connect(user).insuredSwap(swapValue);
+    const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
+
+    // Then submit claim referencing the swap
+    const tx = await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss);
     const receipt = await tx.wait();
-    const claimId = 0; // first claim
+    const claimId = (await insurance.getClaimsCount()) - 1n;
     const oracles = await insurance.getClaimOracles(claimId);
-    return { claimId, oracles, tx1, tx2, tx3, swapValue, loss };
+    return { claimId: Number(claimId), oracles, tx1, tx2, tx3, swapValue, loss };
   }
 
   // Helper: all oracles commit and reveal
@@ -151,7 +156,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
     beforeEach(async function () {
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, ethers.parseEther("500"));
-      await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
+      await token.connect(user1).approve(await insurance.getAddress(), ACTIVATION_FEE);
     });
 
     it("should allow buying a policy with coverage level", async function () {
@@ -161,11 +166,11 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       expect(policy.coverageLevel).to.equal(CoverageLevel.High);
     });
 
-    it("should deduct premium from user", async function () {
+    it("should deduct only activation fee (1 MEVI) from user", async function () {
       const before = await token.balanceOf(user1.address);
       await insurance.connect(user1).buyPolicy(CoverageLevel.Medium);
       const after = await token.balanceOf(user1.address);
-      expect(before - after).to.equal(PREMIUM);
+      expect(before - after).to.equal(ACTIVATION_FEE);
     });
 
     it("should emit PolicyPurchased event", async function () {
@@ -175,7 +180,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
 
     it("should revert if not registered", async function () {
       await token.transfer(user2.address, ethers.parseEther("500"));
-      await token.connect(user2).approve(await insurance.getAddress(), PREMIUM);
+      await token.connect(user2).approve(await insurance.getAddress(), ACTIVATION_FEE);
       await expect(
         insurance.connect(user2).buyPolicy(CoverageLevel.High)
       ).to.be.revertedWith("Not registered");
@@ -183,7 +188,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
 
     it("should revert if policy already active", async function () {
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
-      await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
+      await token.connect(user1).approve(await insurance.getAddress(), ACTIVATION_FEE);
       await expect(
         insurance.connect(user1).buyPolicy(CoverageLevel.High)
       ).to.be.revertedWith("Policy already active");
@@ -218,74 +223,77 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
       const tx2 = ethers.keccak256(ethers.toUtf8Bytes("victim"));
       const tx3 = ethers.keccak256(ethers.toUtf8Bytes("backrun"));
+      const swapValue = ethers.parseEther("500");
+
+      await insurance.connect(user1).insuredSwap(swapValue);
+      const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
+
       await expect(
-        insurance.connect(user1).submitClaim(tx1, tx2, tx3, ethers.parseEther("500"), ethers.parseEther("50"))
+        insurance.connect(user1).submitClaim(swapId, tx1, tx2, tx3, ethers.parseEther("50"))
       ).to.emit(insurance, "ClaimSubmitted");
     });
 
-    it("should track daily swap count", async function () {
-      const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
-      const tx2 = ethers.keccak256(ethers.toUtf8Bytes("victim"));
-      const tx3 = ethers.keccak256(ethers.toUtf8Bytes("backrun"));
+    it("should track daily swap count in insuredSwap", async function () {
       const sv = ethers.parseEther("100");
-      const loss = ethers.parseEther("10");
 
-      await insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss);
-      await insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss);
-      await insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss);
+      await insurance.connect(user1).insuredSwap(sv);
+      await insurance.connect(user1).insuredSwap(sv);
+      await insurance.connect(user1).insuredSwap(sv);
 
       // Bronze tier: max 3 swaps/day - 4th should fail
       await expect(
-        insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss)
+        insurance.connect(user1).insuredSwap(sv)
       ).to.be.revertedWith("Daily swap limit reached");
     });
 
     it("should reset daily count on new day", async function () {
-      const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
-      const tx2 = ethers.keccak256(ethers.toUtf8Bytes("victim"));
-      const tx3 = ethers.keccak256(ethers.toUtf8Bytes("backrun"));
       const sv = ethers.parseEther("100");
-      const loss = ethers.parseEther("10");
 
-      await insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss);
-      await insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss);
-      await insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss);
+      await insurance.connect(user1).insuredSwap(sv);
+      await insurance.connect(user1).insuredSwap(sv);
+      await insurance.connect(user1).insuredSwap(sv);
 
       // Advance 1 day
       await time.increase(24 * 60 * 60);
 
       // Should work again
       await expect(
-        insurance.connect(user1).submitClaim(tx1, tx2, tx3, sv, loss)
+        insurance.connect(user1).insuredSwap(sv)
       ).to.not.be.reverted;
     });
 
-    it("should revert without active policy", async function () {
+    it("should revert submitClaim without active policy", async function () {
       const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
       await expect(
         insurance.connect(user2).submitClaim(
-          tx1, tx1, tx1, ethers.parseEther("100"), ethers.parseEther("10")
+          0, tx1, tx1, tx1, ethers.parseEther("10")
         )
-      ).to.be.revertedWith("No active policy");
+      ).to.be.revertedWith("Invalid swap ID");
     });
 
-    it("should revert if policy expired", async function () {
+    it("should revert insuredSwap if policy expired", async function () {
       await time.increase(31 * 24 * 60 * 60);
-      const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
       await expect(
-        insurance.connect(user1).submitClaim(
-          tx1, tx1, tx1, ethers.parseEther("100"), ethers.parseEther("10")
-        )
+        insurance.connect(user1).insuredSwap(ethers.parseEther("100"))
       ).to.be.revertedWith("Policy expired");
     });
 
-    it("should revert if swap value exceeds policy max", async function () {
-      const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
+    it("should revert insuredSwap if swap value exceeds policy max", async function () {
       await expect(
-        insurance.connect(user1).submitClaim(
-          tx1, tx1, tx1, ethers.parseEther("2000"), ethers.parseEther("10")
-        )
+        insurance.connect(user1).insuredSwap(ethers.parseEther("2000"))
       ).to.be.revertedWith("Swap value exceeds policy max");
+    });
+
+    it("should revert submitClaim if swap already claimed", async function () {
+      const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
+      const sv = ethers.parseEther("100");
+      await insurance.connect(user1).insuredSwap(sv);
+      const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
+      await insurance.connect(user1).submitClaim(swapId, tx1, tx1, tx1, ethers.parseEther("10"));
+
+      await expect(
+        insurance.connect(user1).submitClaim(swapId, tx1, tx1, tx1, ethers.parseEther("10"))
+      ).to.be.revertedWith("Swap already claimed");
     });
   });
 

@@ -10,7 +10,7 @@ describe("MEVInsurance (Legacy Interface)", function () {
   let user1;
   let user2;
 
-  const PREMIUM = ethers.parseEther("100");
+  const ACTIVATION_FEE = ethers.parseEther("1");
   const CoverageLevel = { Low: 0, Medium: 1, High: 2 };
 
   beforeEach(async function () {
@@ -34,7 +34,7 @@ describe("MEVInsurance (Legacy Interface)", function () {
     );
     await insurance.waitForDeployment();
 
-    // Give user1 tokens for premium and approve
+    // Give user1 tokens for activation fee and approve
     await token.transfer(user1.address, ethers.parseEther("500"));
 
     // Fund insurance contract for payouts
@@ -64,7 +64,7 @@ describe("MEVInsurance (Legacy Interface)", function () {
   describe("Buy Policy", function () {
     beforeEach(async function () {
       await insurance.connect(user1).registerUser();
-      await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
+      await token.connect(user1).approve(await insurance.getAddress(), ACTIVATION_FEE);
     });
 
     it("should allow registered user to buy a policy", async function () {
@@ -73,15 +73,15 @@ describe("MEVInsurance (Legacy Interface)", function () {
       expect(policy.active).to.be.true;
     });
 
-    it("should deduct premium from user", async function () {
+    it("should deduct activation fee from user", async function () {
       const balanceBefore = await token.balanceOf(user1.address);
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
       const balanceAfter = await token.balanceOf(user1.address);
-      expect(balanceBefore - balanceAfter).to.equal(PREMIUM);
+      expect(balanceBefore - balanceAfter).to.equal(ACTIVATION_FEE);
     });
 
     it("should revert if not registered", async function () {
-      await token.connect(user2).approve(await insurance.getAddress(), PREMIUM);
+      await token.connect(user2).approve(await insurance.getAddress(), ACTIVATION_FEE);
       await expect(
         insurance.connect(user2).buyPolicy(CoverageLevel.High)
       ).to.be.revertedWith("Not registered");
@@ -89,7 +89,7 @@ describe("MEVInsurance (Legacy Interface)", function () {
 
     it("should revert if policy already active", async function () {
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
-      await token.connect(user1).approve(await insurance.getAddress(), PREMIUM);
+      await token.connect(user1).approve(await insurance.getAddress(), ACTIVATION_FEE);
       await expect(
         insurance.connect(user1).buyPolicy(CoverageLevel.High)
       ).to.be.revertedWith("Policy already active");

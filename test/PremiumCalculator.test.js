@@ -394,30 +394,31 @@ describe("PremiumCalculator", function () {
       await token.transfer(await insurance.getAddress(), e(100000));
     });
 
-    it("should use default premium when no calculator set", async function () {
-      await insurance.connect(user1).registerUser();
-      await token.transfer(user1.address, e(500));
-      await token.connect(user1).approve(await insurance.getAddress(), e(100));
-
-      const balBefore = await token.balanceOf(user1.address);
-      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
-      const balAfter = await token.balanceOf(user1.address);
-
-      expect(balBefore - balAfter).to.equal(e(100)); // defaultPremium
-    });
-
-    it("should use calculator premium when set", async function () {
-      // Set calculator on insurance
-      await insurance.setPremiumCalculator(await calculator.getAddress());
-
-      // With default params (no market data), High coverage on defaultCoverage=1000:
-      // premium = max(1000 * formula, 1000 * 1.5%) = max(15, 15) = 15 MEVI
+    it("should charge only activation fee on buyPolicy (no premium)", async function () {
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, e(500));
       await token.connect(user1).approve(await insurance.getAddress(), e(500));
 
       const balBefore = await token.balanceOf(user1.address);
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
+      const balAfter = await token.balanceOf(user1.address);
+
+      expect(balBefore - balAfter).to.equal(e(1)); // activationFee = 1 MEVI
+    });
+
+    it("should use calculator premium on insuredSwap when set", async function () {
+      // Set calculator on insurance
+      await insurance.setPremiumCalculator(await calculator.getAddress());
+
+      await insurance.connect(user1).registerUser();
+      await token.transfer(user1.address, e(500));
+      await token.connect(user1).approve(await insurance.getAddress(), e(500));
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
+
+      // With default params (no market data), High coverage on 1000 MEVI:
+      // premium = max(1000 * formula, 1000 * 1.5%) = 15 MEVI
+      const balBefore = await token.balanceOf(user1.address);
+      await insurance.connect(user1).insuredSwap(e(1000));
       const balAfter = await token.balanceOf(user1.address);
 
       expect(balBefore - balAfter).to.equal(e(15)); // calculator premium

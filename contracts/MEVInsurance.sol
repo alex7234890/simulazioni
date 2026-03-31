@@ -45,7 +45,10 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     /// @dev Default policy duration
     uint256 public policyDuration = 30 days;
 
-    /// @dev Default premium (simplified, Phase 4 will add PremiumCalculator)
+    /// @dev Symbolic policy activation fee (1 MEVI)
+    uint256 public activationFee = 1 * 1e18;
+
+    /// @dev Default premium fallback if no PremiumCalculator set
     uint256 public defaultPremium = 100 * 1e18;
 
     /// @dev Default coverage amount
@@ -94,6 +97,12 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     /// @dev Mapping from user to their claim IDs
     mapping(address => uint256[]) public userClaimIds;
 
+    /// @dev All insured swaps
+    DataTypes.InsuredSwap[] public insuredSwaps;
+
+    /// @dev Mapping from user to their insured swap IDs
+    mapping(address => uint256[]) public userInsuredSwapIds;
+
     // -------------------------------------------------------
     //  Events
     // -------------------------------------------------------
@@ -130,6 +139,12 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         uint256 dispersione
     );
     event PayoutIssued(uint256 indexed claimId, address indexed user, uint256 amount);
+    event SwapInsured(
+        uint256 indexed swapId,
+        address indexed user,
+        uint256 swapValue,
+        uint256 premiumPaid
+    );
     event ParameterUpdated(string param, uint256 value);
 
     // -------------------------------------------------------
@@ -172,7 +187,8 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Buy an insurance policy.
+     * @dev Buy an insurance policy. Charges only a symbolic activation fee (1 MEVI).
+     *      Premium is calculated and paid per swap via insuredSwap().
      * @param _coverageLevel Desired coverage level
      */
     function buyPolicy(DataTypes.CoverageLevel _coverageLevel) external {
@@ -180,21 +196,14 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         require(!policies[msg.sender].active, "Policy already active");
         require(!userProfiles[msg.sender].isBlacklisted, "User is blacklisted");
 
-        uint256 premium;
-        if (address(premiumCalculator) != address(0)) {
-            premium = premiumCalculator.calculatePremium(defaultCoverage, _coverageLevel);
-            if (premium == 0) premium = defaultPremium;
-        } else {
-            premium = defaultPremium;
-        }
         uint256 start = block.timestamp;
         uint256 end = start + policyDuration;
 
-        // Checks done, now effects
+        // Effects
         policies[msg.sender] = DataTypes.Policy({
             holder: msg.sender,
             coverageLevel: _coverageLevel,
-            premium: premium,
+            premium: activationFee,
             startTime: start,
             endTime: end,
             maxSwapValue: defaultCoverage,
@@ -206,40 +215,40 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         userProfiles[msg.sender].policyEnd = end;
         userProfiles[msg.sender].coverageLevel = _coverageLevel;
 
-        // Interaction: transfer premium
+        // Interaction: transfer symbolic activation fee
         require(
-            token.transferFrom(msg.sender, address(this), premium),
-            "Premium transfer failed"
+            token.transferFrom(msg.sender, address(this), activationFee),
+            "Activation fee transfer failed"
         );
 
-        emit PolicyPurchased(msg.sender, _coverageLevel, premium, start, end);
+        emit PolicyPurchased(msg.sender, _coverageLevel, activationFee, start, end);
     }
 
     // -------------------------------------------------------
-    //  Claim Submission
+    //  Insured Swap (premium per swap)
     // -------------------------------------------------------
 
     /**
-     * @dev Submit a claim for a sandwich attack.
-     * @param _txHash1 Frontrun transaction hash
-     * @param _txHash2 Victim transaction hash
-     * @param _txHash3 Backrun transaction hash
-     * @param _swapValue Value of the swap
-     * @param _loss Claimed loss amount
+     * @dev Register an insured swap. Premium is calculated and paid here.
+     *      User must have an active policy. After calling this, the user can
+     *      submit a claim if the swap is attacked.
+     * @param _swapValue Value of the swap to insure
      */
-    function submitClaim(
-        bytes32 _txHash1,
-        bytes32 _txHash2,
-        bytes32 _txHash3,
-        uint256 _swapValue,
-        uint256 _loss
-    ) external nonReentrant {
+    function insuredSwap(uint256 _swapValue) external nonReentrant {
         DataTypes.Policy storage policy = policies[msg.sender];
         require(policy.active, "No active policy");
         require(block.timestamp <= policy.endTime, "Policy expired");
-        require(_loss > 0, "Loss must be > 0");
         require(_swapValue > 0, "Swap value must be > 0");
         require(_swapValue <= policy.maxSwapValue, "Swap value exceeds policy max");
+
+        // Calculate premium
+        uint256 premium;
+        if (address(premiumCalculator) != address(0)) {
+            premium = premiumCalculator.calculatePremium(_swapValue, policy.coverageLevel);
+            if (premium == 0) premium = (_swapValue * 150) / 10000; // fallback: 1.5% min
+        } else {
+            premium = (_swapValue * 150) / 10000; // 1.5% of swap value
+        }
 
         // Check daily swap limits per tier
         DataTypes.UserProfile storage profile = userProfiles[msg.sender];
@@ -256,6 +265,60 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         }
         profile.totalSwaps++;
 
+        // Store insured swap
+        uint256 swapId = insuredSwaps.length;
+        insuredSwaps.push(DataTypes.InsuredSwap({
+            user: msg.sender,
+            swapValue: _swapValue,
+            premiumPaid: premium,
+            timestamp: block.timestamp,
+            claimed: false
+        }));
+        userInsuredSwapIds[msg.sender].push(swapId);
+
+        // Interaction: transfer premium
+        require(
+            token.transferFrom(msg.sender, address(this), premium),
+            "Premium transfer failed"
+        );
+
+        emit SwapInsured(swapId, msg.sender, _swapValue, premium);
+    }
+
+    // -------------------------------------------------------
+    //  Claim Submission
+    // -------------------------------------------------------
+
+    /**
+     * @dev Submit a claim for a sandwich attack on a previously insured swap.
+     * @param _swapId ID of the insured swap (from insuredSwap())
+     * @param _txHash1 Frontrun transaction hash
+     * @param _txHash2 Victim transaction hash
+     * @param _txHash3 Backrun transaction hash
+     * @param _loss Claimed loss amount
+     */
+    function submitClaim(
+        uint256 _swapId,
+        bytes32 _txHash1,
+        bytes32 _txHash2,
+        bytes32 _txHash3,
+        uint256 _loss
+    ) external nonReentrant {
+        require(_swapId < insuredSwaps.length, "Invalid swap ID");
+        DataTypes.InsuredSwap storage insSwap = insuredSwaps[_swapId];
+        require(insSwap.user == msg.sender, "Not swap owner");
+        require(!insSwap.claimed, "Swap already claimed");
+
+        DataTypes.Policy storage policy = policies[msg.sender];
+        require(policy.active, "No active policy");
+        require(block.timestamp <= policy.endTime, "Policy expired");
+        require(_loss > 0, "Loss must be > 0");
+        require(_loss <= insSwap.swapValue, "Loss exceeds swap value");
+
+        insSwap.claimed = true;
+
+        DataTypes.UserProfile storage profile = userProfiles[msg.sender];
+
         // Select oracles
         uint256 seed = uint256(keccak256(abi.encodePacked(
             block.timestamp, block.prevrandao, msg.sender, claimsArray.length
@@ -264,7 +327,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
 
         uint256 claimId = claimsArray.length;
 
-        // Push a new claim - we need to build it in storage since it has dynamic arrays
+        // Push a new claim
         claimsArray.push();
         DataTypes.Claim storage newClaim = claimsArray[claimId];
         newClaim.user = msg.sender;
@@ -273,7 +336,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         newClaim.txHash3 = _txHash3;
         newClaim.status = DataTypes.ClaimStatus.OracleReview;
         newClaim.coverageLevel = policy.coverageLevel;
-        newClaim.swapValue = _swapValue;
+        newClaim.swapValue = insSwap.swapValue;
         newClaim.loss = _loss;
         newClaim.timestamp = block.timestamp;
 
@@ -287,7 +350,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         emit ClaimSubmitted(
             claimId, msg.sender,
             _txHash1, _txHash2, _txHash3,
-            _swapValue, _loss,
+            insSwap.swapValue, _loss,
             selectedOracles
         );
     }
@@ -521,6 +584,14 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         return (c.user, c.status, c.finalFraudScore, c.swapValue, c.loss, c.dispersione, c.revealCount, c.commitCount);
     }
 
+    function getInsuredSwapsCount() external view returns (uint256) {
+        return insuredSwaps.length;
+    }
+
+    function getUserInsuredSwaps(address _user) external view returns (uint256[] memory) {
+        return userInsuredSwapIds[_user];
+    }
+
     function getUserProfile(address _user) external view returns (
         DataTypes.Tier tier,
         bool policyActive,
@@ -548,6 +619,11 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     function setPolicyDuration(uint256 _val) external onlyOwner {
         policyDuration = _val;
         emit ParameterUpdated("policyDuration", _val);
+    }
+
+    function setActivationFee(uint256 _val) external onlyOwner {
+        activationFee = _val;
+        emit ParameterUpdated("activationFee", _val);
     }
 
     function setDefaultPremium(uint256 _val) external onlyOwner {

@@ -124,10 +124,19 @@ library DataTypes {
     struct Policy {
         address holder;
         CoverageLevel coverageLevel;
-        uint256 premium;            // Premium paid in MEVI
+        uint256 premium;            // Activation fee paid in MEVI
         uint256 startTime;
         uint256 endTime;
         uint256 maxSwapValue;       // Max insurable swap value for this policy
         bool active;
+    }
+
+    /// @dev Insured swap registered before claim submission
+    struct InsuredSwap {
+        address user;
+        uint256 swapValue;          // Value of the swap in MEVI
+        uint256 premiumPaid;        // Premium calculated and paid for this swap
+        uint256 timestamp;          // When the swap was insured
+        bool claimed;               // Whether a claim was submitted for this swap
     }
 }

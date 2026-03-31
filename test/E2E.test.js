@@ -73,16 +73,11 @@ describe("End-to-End Integration (Phase 8)", function () {
     }
   }
 
-  // Get the actual premium that buyPolicy will charge (uses defaultCoverage=1000e18)
-  async function getActualPremium(coverageLevel) {
-    return await calculator.calculatePremium(e(1000), coverageLevel);
-  }
-
   async function setupUserWithPolicy(user, coverageLevel = CoverageLevel.High) {
     await insurance.connect(user).registerUser();
     await token.transfer(user.address, e(10000));
-    const premium = await getActualPremium(coverageLevel);
-    await token.connect(user).approve(await insurance.getAddress(), premium);
+    // Approve enough for activation fee + future swap premiums
+    await token.connect(user).approve(await insurance.getAddress(), e(10000));
     await insurance.connect(user).buyPolicy(coverageLevel);
   }
 
@@ -91,8 +86,12 @@ describe("End-to-End Integration (Phase 8)", function () {
     const tx2 = ethers.keccak256(ethers.toUtf8Bytes("victim_" + Date.now()));
     const tx3 = ethers.keccak256(ethers.toUtf8Bytes("backrun_" + Date.now()));
 
+    // First insure the swap (premium paid here)
+    await insurance.connect(user).insuredSwap(swapValue);
+    const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
+
     const claimCountBefore = await insurance.getClaimsCount();
-    await insurance.connect(user).submitClaim(tx1, tx2, tx3, swapValue, loss);
+    await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss);
     const claimId = claimCountBefore;
     const assignedOracles = await insurance.getClaimOracles(claimId);
     return { claimId: Number(claimId), assignedOracles, tx1, tx2, tx3 };
@@ -244,8 +243,7 @@ describe("End-to-End Integration (Phase 8)", function () {
 
       // ── Step 2: Victim registers and buys insurance ──
       await insurance.connect(victim).registerUser();
-      const premium = await getActualPremium(CoverageLevel.High);
-      await token.connect(victim).approve(await insurance.getAddress(), premium);
+      await token.connect(victim).approve(await insurance.getAddress(), e(10000));
       await insurance.connect(victim).buyPolicy(CoverageLevel.High);
 
       // ── Step 3: Victim submits claim ──
@@ -286,8 +284,7 @@ describe("End-to-End Integration (Phase 8)", function () {
     it("should complete flow with Medium coverage (90% payout)", async function () {
       // Register + buy policy with Medium coverage
       await insurance.connect(victim).registerUser();
-      const premium = await getActualPremium(CoverageLevel.Medium);
-      await token.connect(victim).approve(await insurance.getAddress(), premium);
+      await token.connect(victim).approve(await insurance.getAddress(), e(10000));
       await insurance.connect(victim).buyPolicy(CoverageLevel.Medium);
 
       // Submit claim (swapValue <= defaultCoverage 1000)
@@ -506,22 +503,23 @@ describe("End-to-End Integration (Phase 8)", function () {
   //  Scenario 4: Premium Calculator Integration
   // =================================================================
   describe("Scenario 4: Premium Calculator Integration", function () {
-    it("should use dynamic premium when calculator is set", async function () {
-      // Register user
+    it("should use dynamic premium on insuredSwap when calculator is set", async function () {
+      // Register user and buy policy (only activation fee)
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, e(50000));
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
 
-      // buyPolicy uses defaultCoverage (1000e18) as swap value for premium calc
-      const expectedPremium = await getActualPremium(CoverageLevel.High);
+      // Now insuredSwap uses calculator to compute premium
+      const swapValue = e(1000);
+      const expectedPremium = await calculator.calculatePremium(swapValue, CoverageLevel.High);
       expect(expectedPremium).to.be.gt(0);
 
-      // Buy policy - premium is deducted
       const balBefore = await token.balanceOf(user1.address);
-      await token.connect(user1).approve(await insurance.getAddress(), expectedPremium);
-      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
+      await insurance.connect(user1).insuredSwap(swapValue);
       const balAfter = await token.balanceOf(user1.address);
 
-      // User paid the dynamic premium
+      // User paid the dynamic premium for the swap
       expect(balBefore - balAfter).to.equal(expectedPremium);
     });
 
@@ -557,8 +555,7 @@ describe("End-to-End Integration (Phase 8)", function () {
       // Setup user with policy
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, e(50000));
-      const premium = await getActualPremium(CoverageLevel.High);
-      await token.connect(user1).approve(await insurance.getAddress(), premium);
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
 
       // Submit claim
@@ -581,8 +578,7 @@ describe("End-to-End Integration (Phase 8)", function () {
     it("should handle invalid pattern detection", async function () {
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, e(50000));
-      const premium = await getActualPremium(CoverageLevel.High);
-      await token.connect(user1).approve(await insurance.getAddress(), premium);
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
 
       const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), e(100));
@@ -600,8 +596,7 @@ describe("End-to-End Integration (Phase 8)", function () {
     it("should handle CAPTCHA-required claim (Bronze, medium fraud)", async function () {
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, e(50000));
-      const premium = await getActualPremium(CoverageLevel.High);
-      await token.connect(user1).approve(await insurance.getAddress(), premium);
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
 
       const loss = e(100);
@@ -664,10 +659,8 @@ describe("End-to-End Integration (Phase 8)", function () {
       await token.transfer(user1.address, e(50000));
       await token.transfer(user2.address, e(50000));
 
-      const premium1 = await getActualPremium(CoverageLevel.High);
-      const premium2 = await getActualPremium(CoverageLevel.Medium);
-      await token.connect(user1).approve(await insurance.getAddress(), premium1);
-      await token.connect(user2).approve(await insurance.getAddress(), premium2);
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
+      await token.connect(user2).approve(await insurance.getAddress(), e(50000));
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
       await insurance.connect(user2).buyPolicy(CoverageLevel.Medium);
 
@@ -722,8 +715,7 @@ describe("End-to-End Integration (Phase 8)", function () {
     it("should finalize claim after oracle timeout with partial reveals", async function () {
       // Setup user
       await insurance.connect(victim).registerUser();
-      const premium = await getActualPremium(CoverageLevel.High);
-      await token.connect(victim).approve(await insurance.getAddress(), premium);
+      await token.connect(victim).approve(await insurance.getAddress(), e(10000));
       await insurance.connect(victim).buyPolicy(CoverageLevel.High);
 
       // Submit claim
@@ -784,8 +776,7 @@ describe("End-to-End Integration (Phase 8)", function () {
       // Complete mini-lifecycle
       await insurance.connect(user1).registerUser();
       await token.transfer(user1.address, e(50000));
-      const premium = await getActualPremium(CoverageLevel.High);
-      await token.connect(user1).approve(await insurance.getAddress(), premium);
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
       await insurance.connect(user1).buyPolicy(CoverageLevel.High);
 
       const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), e(50));
