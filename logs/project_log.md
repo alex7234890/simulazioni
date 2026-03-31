@@ -77,6 +77,22 @@
    - 48 new tests (PremiumCalculator.test.js)
    - Total: 181/181 tests passing
 
+8. **Phase 5: TierSystem.sol**
+   - Tier upgrade requirements from PDF Table 8:
+     - Bronze -> Silver: 18 swaps, 30 days membership, avg fraud score < 52
+     - Silver -> Gold: 55 swaps, 60 days membership, avg fraud score < 35
+   - checkAndUpgrade(): automatic tier promotion when requirements met
+   - Platinum upgrade: requestPlatinum() with 20% stake + off-chain CAPTCHA verification
+   - Full Platinum flow: stake deposit -> owner verifyCaptcha -> finalizePlatinum
+   - Blacklist system: blacklistUser() adds 20% penalty debt on loss
+   - payDebt(): partial/full debt payment, auto un-blacklist when debt = 0
+   - Data sync from MEVInsurance (owner-triggered)
+   - View helpers: canUpgradeToSilver(), canUpgradeToGold(), getMaxDailySwaps()
+   - All parameters configurable by owner
+   - Integrated reference in MEVInsurance.sol
+   - 59 new tests (TierSystem.test.js) including full lifecycle test
+   - Total: 240/240 tests passing
+
 ## Current Architecture
 
 ```
@@ -85,6 +101,7 @@ contracts/
   MEVInsurance.sol              - Insurance contract (Phase 3: full ClaimManager)
   OracleRegistry.sol            - Oracle management (register, activate, select, slash)
   PremiumCalculator.sol          - Dynamic premium calculation (PDF formula)
+  TierSystem.sol                 - User tier management (Bronze->Silver->Gold->Platinum)
   libraries/
     DataTypes.sol               - Shared enums and structs
   test/
@@ -101,6 +118,7 @@ test/
   DataTypes.test.js             - DataTypes unit tests (12 tests)
   OracleRegistry.test.js        - Oracle registry tests (46 tests)
   PremiumCalculator.test.js      - Premium calculator tests (48 tests)
+  TierSystem.test.js             - Tier system tests (59 tests)
 logs/
   project_log.md                - This file
 ```
@@ -115,10 +133,10 @@ logs/
 
 ## Last Changes
 
-- Created contracts/PremiumCalculator.sol with full premium formula
-- Integrated PremiumCalculator into MEVInsurance.sol buyPolicy()
-- Created test/PremiumCalculator.test.js with 48 tests
-- Total: 181/181 tests passing
+- Created contracts/TierSystem.sol with full tier management
+- Integrated TierSystem reference into MEVInsurance.sol
+- Created test/TierSystem.test.js with 59 tests
+- Total: 240/240 tests passing
 
 ## Next Tasks (Phases)
 
@@ -126,7 +144,7 @@ logs/
 2. ~~Phase 2: OracleRegistry.sol~~ DONE
 3. ~~Phase 3: ClaimManager (refactor MEVInsurance.sol)~~ DONE
 4. ~~Phase 4: PremiumCalculator.sol~~ DONE
-5. Phase 5: TierSystem.sol
+5. ~~Phase 5: TierSystem.sol~~ DONE
 6. Phase 6: SlashingSystem.sol
 7. Phase 7: SandwichBot.sol + MockAMM.sol
 8. Phase 8: End-to-end test
