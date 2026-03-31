@@ -93,6 +93,24 @@
    - 59 new tests (TierSystem.test.js) including full lifecycle test
    - Total: 240/240 tests passing
 
+9. **Phase 6: SlashingSystem.sol**
+   - Report submission: reporter deposits Creport = 0.014 ETH, jury of 7 selected
+   - Jury selection excludes accused oracle (requests nJury+1, filters accused)
+   - Commit-reveal jury voting: slash percentage 0-100%
+   - Finalization based on median vote:
+     - Median > 0: slash = stake * median / 100
+       - Jury reward deducted from slash
+       - Residual: 75% to pool, 25% to reporter
+       - Reporter deposit refunded
+       - Median > 50% (thetaExpulsion): oracle expelled permanently
+       - Median <= 50%: oracle slashed, can reintegrate
+     - Median = 0: reporter deposit confiscated, distributed as jury reward
+   - Pool management: accumulated slashing funds, owner withdrawable
+   - Commit/reveal timeouts (2 days each), partial reveal finalization
+   - All parameters configurable by owner
+   - 46 new tests (SlashingSystem.test.js)
+   - Total: 286/286 tests passing
+
 ## Current Architecture
 
 ```
@@ -102,6 +120,7 @@ contracts/
   OracleRegistry.sol            - Oracle management (register, activate, select, slash)
   PremiumCalculator.sol          - Dynamic premium calculation (PDF formula)
   TierSystem.sol                 - User tier management (Bronze->Silver->Gold->Platinum)
+  SlashingSystem.sol             - Oracle slashing disputes with jury commit-reveal
   libraries/
     DataTypes.sol               - Shared enums and structs
   test/
@@ -119,6 +138,7 @@ test/
   OracleRegistry.test.js        - Oracle registry tests (46 tests)
   PremiumCalculator.test.js      - Premium calculator tests (48 tests)
   TierSystem.test.js             - Tier system tests (59 tests)
+  SlashingSystem.test.js         - Slashing system tests (46 tests)
 logs/
   project_log.md                - This file
 ```
@@ -133,10 +153,9 @@ logs/
 
 ## Last Changes
 
-- Created contracts/TierSystem.sol with full tier management
-- Integrated TierSystem reference into MEVInsurance.sol
-- Created test/TierSystem.test.js with 59 tests
-- Total: 240/240 tests passing
+- Created contracts/SlashingSystem.sol with full jury-based slashing
+- Created test/SlashingSystem.test.js with 46 tests
+- Total: 286/286 tests passing
 
 ## Next Tasks (Phases)
 
@@ -145,7 +164,7 @@ logs/
 3. ~~Phase 3: ClaimManager (refactor MEVInsurance.sol)~~ DONE
 4. ~~Phase 4: PremiumCalculator.sol~~ DONE
 5. ~~Phase 5: TierSystem.sol~~ DONE
-6. Phase 6: SlashingSystem.sol
+6. ~~Phase 6: SlashingSystem.sol~~ DONE
 7. Phase 7: SandwichBot.sol + MockAMM.sol
 8. Phase 8: End-to-end test
 9. Phase 9: Patt update mechanism
