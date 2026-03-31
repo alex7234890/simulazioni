@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./libraries/DataTypes.sol";
 import "./OracleRegistry.sol";
 import "./PremiumCalculator.sol";
+import "./TierSystem.sol";
 
 /**
  * @title MEVInsurance
@@ -32,6 +33,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     IERC20 public token;
     OracleRegistry public oracleRegistry;
     PremiumCalculator public premiumCalculator;
+    TierSystem public tierSystem;
 
     // -------------------------------------------------------
     //  Protocol Parameters (configurable, Table 8 defaults)
@@ -561,6 +563,11 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     function setPremiumCalculator(address _calculator) external onlyOwner {
         premiumCalculator = PremiumCalculator(_calculator);
         emit ParameterUpdated("premiumCalculator", uint256(uint160(_calculator)));
+    }
+
+    function setTierSystem(address _tierSystem) external onlyOwner {
+        tierSystem = TierSystem(_tierSystem);
+        emit ParameterUpdated("tierSystem", uint256(uint160(_tierSystem)));
     }
 
     function setOracleTimeout(uint256 _val) external onlyOwner {
