@@ -61,6 +61,22 @@
    - 56 new tests (ClaimManager.test.js) + 9 updated legacy tests
    - Total: 133/133 tests passing
 
+7. **Phase 4: PremiumCalculator.sol**
+   - Premium formula from PDF section 1.4.6:
+     P = max(V * [(Patt * L%) + (Tint * E/(1-E))/Vbase + Coracle24h/Vbase] * (1+M) * Fcov, Pmin * V)
+   - Three-component base rate: attack probability, fraud cost, oracle cost
+   - Solvency ratio with adaptive margin:
+     - SR >= 1.5x: mAdj = 0
+     - 1.3x <= SR < 1.5x: mAdj = 5% (deltaMmed)
+     - SR < 1.3x: mAdj = 10% (deltaMhigh)
+   - Coverage factors: Low=70%, Medium=90%, High=100%
+   - Minimum premium floor: 1.5% of swap value
+   - Market data updates (tint, vbase, coracle24h) by owner
+   - All parameters configurable (patt, lPercent, eFNR, mBase, pmin, fcov, SR thresholds)
+   - Integrated with MEVInsurance.sol: buyPolicy uses calculator when set
+   - 48 new tests (PremiumCalculator.test.js)
+   - Total: 181/181 tests passing
+
 ## Current Architecture
 
 ```
@@ -68,6 +84,7 @@ contracts/
   MEVToken.sol                  - ERC20 token (MEVI, 1M supply)
   MEVInsurance.sol              - Insurance contract (Phase 3: full ClaimManager)
   OracleRegistry.sol            - Oracle management (register, activate, select, slash)
+  PremiumCalculator.sol          - Dynamic premium calculation (PDF formula)
   libraries/
     DataTypes.sol               - Shared enums and structs
   test/
@@ -83,6 +100,7 @@ test/
   ClaimManager.test.js          - ClaimManager full tests (56 tests)
   DataTypes.test.js             - DataTypes unit tests (12 tests)
   OracleRegistry.test.js        - Oracle registry tests (46 tests)
+  PremiumCalculator.test.js      - Premium calculator tests (48 tests)
 logs/
   project_log.md                - This file
 ```
@@ -97,17 +115,17 @@ logs/
 
 ## Last Changes
 
-- Refactored contracts/MEVInsurance.sol: full ClaimManager with commit-reveal oracle system
-- Created test/ClaimManager.test.js with 56 tests
-- Updated test/MEVInsurance.test.js for new contract interface (9 tests)
-- Total: 133/133 tests passing
+- Created contracts/PremiumCalculator.sol with full premium formula
+- Integrated PremiumCalculator into MEVInsurance.sol buyPolicy()
+- Created test/PremiumCalculator.test.js with 48 tests
+- Total: 181/181 tests passing
 
 ## Next Tasks (Phases)
 
 1. ~~Phase 1: Data structures and types~~ DONE
 2. ~~Phase 2: OracleRegistry.sol~~ DONE
 3. ~~Phase 3: ClaimManager (refactor MEVInsurance.sol)~~ DONE
-4. Phase 4: PremiumCalculator.sol
+4. ~~Phase 4: PremiumCalculator.sol~~ DONE
 5. Phase 5: TierSystem.sol
 6. Phase 6: SlashingSystem.sol
 7. Phase 7: SandwichBot.sol + MockAMM.sol
