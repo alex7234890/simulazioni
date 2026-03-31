@@ -111,6 +111,26 @@
    - 46 new tests (SlashingSystem.test.js)
    - Total: 286/286 tests passing
 
+10. **Phase 7: SandwichBot.sol + MockAMM.sol + MockUSDC.sol**
+   - SandwichBot: executeFrontrun/executeBackrun with profit tracking per attack
+   - MockAMM: constant product AMM (x*y=k) with addLiquidity, swap, getPrice, getAmountOut
+   - MockUSDC: simple ERC20 mock as quote token
+   - 29 new tests (SandwichBot.test.js)
+   - Total: 315/315 tests passing
+
+11. **Phase 8: End-to-End Integration Test**
+   - Full lifecycle: sandwich attack → claim → oracle commit-reveal → CAPTCHA → payout
+   - Tier progression: Bronze → Silver → Gold → Platinum with requirements
+   - Oracle slashing: report → jury commit-reveal → expulsion (median > 50%)
+   - Premium calculator integration: dynamic premium on buyPolicy
+   - Claim rejection: high fraud → blacklist, invalid pattern detection
+   - CAPTCHA flow: Bronze users always get CAPTCHARequired → owner resolves
+   - Multi-user concurrent claims with different outcomes
+   - Oracle timeout handling with partial reveals
+   - Complete protocol smoke test (all contracts wired)
+   - 17 new tests (E2E.test.js)
+   - Total: 332/332 tests passing
+
 ## Current Architecture
 
 ```
@@ -121,6 +141,9 @@ contracts/
   PremiumCalculator.sol          - Dynamic premium calculation (PDF formula)
   TierSystem.sol                 - User tier management (Bronze->Silver->Gold->Platinum)
   SlashingSystem.sol             - Oracle slashing disputes with jury commit-reveal
+  SandwichBot.sol               - MEV sandwich attack simulator (frontrun/backrun)
+  MockAMM.sol                   - Constant product AMM (x*y=k) for simulation
+  MockUSDC.sol                  - ERC20 mock quote token
   libraries/
     DataTypes.sol               - Shared enums and structs
   test/
@@ -139,6 +162,8 @@ test/
   PremiumCalculator.test.js      - Premium calculator tests (48 tests)
   TierSystem.test.js             - Tier system tests (59 tests)
   SlashingSystem.test.js         - Slashing system tests (46 tests)
+  SandwichBot.test.js            - Sandwich attack + AMM tests (29 tests)
+  E2E.test.js                    - End-to-end integration tests (17 tests)
 logs/
   project_log.md                - This file
 ```
@@ -153,9 +178,9 @@ logs/
 
 ## Last Changes
 
-- Created contracts/SlashingSystem.sol with full jury-based slashing
-- Created test/SlashingSystem.test.js with 46 tests
-- Total: 286/286 tests passing
+- Created test/E2E.test.js with 17 end-to-end integration tests
+- All 9 contracts wired together and tested as complete protocol
+- Total: 332/332 tests passing
 
 ## Next Tasks (Phases)
 
@@ -165,8 +190,8 @@ logs/
 4. ~~Phase 4: PremiumCalculator.sol~~ DONE
 5. ~~Phase 5: TierSystem.sol~~ DONE
 6. ~~Phase 6: SlashingSystem.sol~~ DONE
-7. Phase 7: SandwichBot.sol + MockAMM.sol
-8. Phase 8: End-to-end test
+7. ~~Phase 7: SandwichBot.sol + MockAMM.sol~~ DONE
+8. ~~Phase 8: End-to-end test~~ DONE
 9. Phase 9: Patt update mechanism
 
 ## How to Run
