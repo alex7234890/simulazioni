@@ -102,7 +102,9 @@ contract PremiumCalculator is Ownable {
     // -------------------------------------------------------
 
     constructor() Ownable(msg.sender) {
-        // Coverage factors (basis points)
+        // Fcov: premium multiplier per coverage level (basis points) - PDF Table 2
+        // NOTE: These are DIFFERENT from payout percentages in MEVInsurance
+        // (Fcov: Low=70%, Med=90%, High=100% vs Payout: Low=50%, Med=70%, High=100%)
         fcov[DataTypes.CoverageLevel.Low] = 7000;     // 70%
         fcov[DataTypes.CoverageLevel.Medium] = 9000;  // 90%
         fcov[DataTypes.CoverageLevel.High] = 10000;   // 100%

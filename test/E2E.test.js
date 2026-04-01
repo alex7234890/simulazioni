@@ -547,6 +547,22 @@ describe("End-to-End Integration (Phase 8)", function () {
       // Critical solvency should increase premium
       expect(premiumCritical).to.be.gte(premiumNormal);
     });
+
+    it("Fcov (premium) and coverage% (payout) are distinct (anti-selection)", async function () {
+      // PDF Table 2: Fcov != payout%
+      // Fcov: Low=70%, Medium=90%, High=100% (premium multiplier)
+      // Payout: Low=50%, Medium=70%, High=100% (reimbursement)
+      expect(await calculator.fcov(CoverageLevel.Low)).to.equal(7000);
+      expect(await calculator.fcov(CoverageLevel.Medium)).to.equal(9000);
+      expect(await calculator.fcov(CoverageLevel.High)).to.equal(10000);
+
+      expect(await insurance.coveragePercentBps(CoverageLevel.Low)).to.equal(5000);
+      expect(await insurance.coveragePercentBps(CoverageLevel.Medium)).to.equal(7000);
+      expect(await insurance.coveragePercentBps(CoverageLevel.High)).to.equal(10000);
+
+      // Low user pays 70% of premium but only gets 50% reimbursement
+      // This discourages adverse selection
+    });
   });
 
   // =================================================================
