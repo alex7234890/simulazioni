@@ -56,8 +56,8 @@ describe("SlashingSystem", function () {
     slashing = await SlashingSystem.deploy(await registry.getAddress());
     await slashing.waitForDeployment();
 
-    // Transfer OracleRegistry ownership to SlashingSystem so it can call slashOracle/expelOracle
-    await registry.transferOwnership(await slashing.getAddress());
+    // Authorize SlashingSystem to call OracleRegistry restricted functions
+    await registry.setAuthorizedCaller(await slashing.getAddress(), true);
 
     // Register and activate 10 oracles (accused + 9 potential jurors)
     // selectOracles requests nJury+1=8, so we need >=9 non-accused active oracles

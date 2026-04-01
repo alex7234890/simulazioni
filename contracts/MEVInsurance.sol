@@ -450,6 +450,24 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         }
 
         emit ClaimFinalized(_claimId, finalStatus, median, claim.dispersione);
+
+        // Reward all oracles that revealed (independent of claim outcome)
+        _rewardRevealedOracles(_claimId);
+    }
+
+    /**
+     * @dev Reward all oracles that revealed their verdict for a claim.
+     * Reward is fixed (rClaim in OracleRegistry) and independent of outcome.
+     */
+    function _rewardRevealedOracles(uint256 _claimId) internal {
+        DataTypes.Claim storage claim = claimsArray[_claimId];
+        for (uint256 i = 0; i < claim.assignedOracles.length; i++) {
+            address oracle = claim.assignedOracles[i];
+            if (hasRevealed[_claimId][oracle]) {
+                // Try to reward; skip silently if registry lacks funds or oracle ineligible
+                try oracleRegistry.rewardOracle(oracle) {} catch {}
+            }
+        }
     }
 
     /**

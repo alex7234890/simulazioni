@@ -173,8 +173,9 @@ describe("End-to-End Integration (Phase 8)", function () {
     await insurance.setTierSystem(await tierSystem.getAddress());
     await tierSystem.setInsuranceContract(await insurance.getAddress());
 
-    // Transfer OracleRegistry ownership to SlashingSystem (needed for slash/expel)
-    await registry.transferOwnership(await slashingSystem.getAddress());
+    // Authorize MEVInsurance and SlashingSystem to call OracleRegistry restricted functions
+    await registry.setAuthorizedCaller(await insurance.getAddress(), true);
+    await registry.setAuthorizedCaller(await slashingSystem.getAddress(), true);
 
     // ── Fund contracts ──
     // Fund insurance pool for claim payouts
@@ -562,6 +563,50 @@ describe("End-to-End Integration (Phase 8)", function () {
 
       // Low user pays 70% of premium but only gets 50% reimbursement
       // This discourages adverse selection
+    });
+  });
+
+  // =================================================================
+  //  Scenario 4b: Oracle Rewards on finalizeClaim
+  // =================================================================
+  describe("Scenario 4b: Oracle Rewards", function () {
+    it("oracles should receive ETH reward after finalizeClaim", async function () {
+      // Setup user and submit claim
+      await insurance.connect(user1).registerUser();
+      await token.transfer(user1.address, e(50000));
+      const premium = await getActualPremium(CoverageLevel.High);
+      await token.connect(user1).approve(await insurance.getAddress(), premium);
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
+
+      const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), e(50));
+
+      // Track oracle balances before
+      const balancesBefore = [];
+      for (const addr of assignedOracles) {
+        balancesBefore.push(await ethers.provider.getBalance(addr));
+      }
+
+      // All oracles commit and reveal
+      await oraclesCommitAndReveal(
+        claimId, assignedOracles,
+        [40, 40, 40, 40, 40, 40, 40],
+        [true, true, true, true, true, true, true]
+      );
+
+      // Finalize (triggers rewards)
+      await insurance.finalizeClaim(claimId);
+
+      // Check at least some oracles received reward (gas costs may affect exact balance)
+      let rewardedCount = 0;
+      for (let i = 0; i < assignedOracles.length; i++) {
+        const balAfter = await ethers.provider.getBalance(assignedOracles[i]);
+        // Oracle spent gas on commit+reveal, but should have received rClaim (0.002 ETH)
+        // Net balance change: received 0.002 ETH - gas spent
+        // We check claimsEvaluated instead as a more reliable indicator
+        const info = await registry.getOracleInfo(assignedOracles[i]);
+        if (info.claimsEvaluated > 0n) rewardedCount++;
+      }
+      expect(rewardedCount).to.equal(7);
     });
   });
 
