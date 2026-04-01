@@ -221,10 +221,10 @@ describe("OracleRegistry", function () {
         .to.emit(registry, "OracleWatchlisted");
     });
 
-    it("should only allow owner to record deviations", async function () {
+    it("should only allow owner or authorized to record deviations", async function () {
       await expect(
         registry.connect(oracle1).recordDeviation(oracle1.address)
-      ).to.be.revertedWithCustomError(registry, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWith("Not owner or authorized");
     });
   });
 
@@ -355,10 +355,10 @@ describe("OracleRegistry", function () {
       expect(await registry.activeOracleCount()).to.equal(0);
     });
 
-    it("should only allow owner to slash", async function () {
+    it("should only allow owner or authorized to slash", async function () {
       await expect(
         registry.connect(oracle1).slashOracle(oracle1.address, 1)
-      ).to.be.revertedWithCustomError(registry, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWith("Not owner or authorized");
     });
   });
 
@@ -439,10 +439,10 @@ describe("OracleRegistry", function () {
       expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther("0.001"));
     });
 
-    it("should only allow owner to reward", async function () {
+    it("should only allow owner or authorized to reward", async function () {
       await expect(
         registry.connect(oracle1).rewardOracle(oracle1.address)
-      ).to.be.revertedWithCustomError(registry, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWith("Not owner or authorized");
     });
   });
 

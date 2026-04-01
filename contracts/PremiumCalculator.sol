@@ -87,6 +87,9 @@ contract PremiumCalculator is Ownable {
     /// @dev High margin delta in basis points (1000 = 10%)
     uint256 public deltaMhigh = 1000;
 
+    /// @dev Authorized updater (e.g. PattUpdater contract) that can call setPatt
+    address public authorizedUpdater;
+
     // -------------------------------------------------------
     //  Events
     // -------------------------------------------------------
@@ -102,7 +105,9 @@ contract PremiumCalculator is Ownable {
     // -------------------------------------------------------
 
     constructor() Ownable(msg.sender) {
-        // Coverage factors (basis points)
+        // Fcov: premium multiplier per coverage level (basis points) - PDF Table 2
+        // NOTE: These are DIFFERENT from payout percentages in MEVInsurance
+        // (Fcov: Low=70%, Med=90%, High=100% vs Payout: Low=50%, Med=70%, High=100%)
         fcov[DataTypes.CoverageLevel.Low] = 7000;     // 70%
         fcov[DataTypes.CoverageLevel.Medium] = 9000;  // 90%
         fcov[DataTypes.CoverageLevel.High] = 10000;   // 100%
@@ -254,9 +259,14 @@ contract PremiumCalculator is Ownable {
     //  Parameter Setters (owner only)
     // -------------------------------------------------------
 
-    function setPatt(uint256 _val) external onlyOwner {
+    function setPatt(uint256 _val) external {
+        require(msg.sender == owner() || msg.sender == authorizedUpdater, "Not owner or authorized updater");
         patt = _val;
         emit PattUpdated(_val);
+    }
+
+    function setAuthorizedUpdater(address _updater) external onlyOwner {
+        authorizedUpdater = _updater;
     }
 
     function setLPercent(uint256 _val) external onlyOwner {

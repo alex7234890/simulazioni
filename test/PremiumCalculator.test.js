@@ -310,7 +310,7 @@ describe("PremiumCalculator", function () {
     it("non-owner cannot set parameters", async function () {
       await expect(
         calculator.connect(user1).setPatt(1000)
-      ).to.be.revertedWithCustomError(calculator, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWith("Not owner or authorized updater");
     });
   });
 

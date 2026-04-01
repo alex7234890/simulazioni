@@ -65,6 +65,9 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     /// @dev Count of currently active oracles
     uint256 public activeOracleCount;
 
+    /// @dev Authorized callers that can call restricted functions (e.g. MEVInsurance, SlashingSystem)
+    mapping(address => bool) public authorizedCallers;
+
     // -------------------------------------------------------
     //  Events
     // -------------------------------------------------------
@@ -90,6 +93,14 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         require(
             oracleData[msg.sender].status == DataTypes.OracleStatus.Active,
             "Not an active oracle"
+        );
+        _;
+    }
+
+    modifier onlyOwnerOrAuthorized() {
+        require(
+            msg.sender == owner() || authorizedCallers[msg.sender],
+            "Not owner or authorized"
         );
         _;
     }
@@ -204,7 +215,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
      * when an oracle's score deviates significantly from the median.
      * @param _oracle Address of the oracle
      */
-    function recordDeviation(address _oracle) external onlyOwner {
+    function recordDeviation(address _oracle) external onlyOwnerOrAuthorized {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(
             info.status == DataTypes.OracleStatus.Active ||
@@ -261,7 +272,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
      * @param _oracle Oracle to slash
      * @param _amount Amount to slash from stake
      */
-    function slashOracle(address _oracle, uint256 _amount) external onlyOwner nonReentrant {
+    function slashOracle(address _oracle, uint256 _amount) external onlyOwnerOrAuthorized nonReentrant {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(info.stake >= _amount, "Slash exceeds stake");
 
@@ -280,7 +291,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
      * @dev Expel an oracle permanently. Called by owner (SlashingSystem).
      * @param _oracle Oracle to expel
      */
-    function expelOracle(address _oracle) external onlyOwner {
+    function expelOracle(address _oracle) external onlyOwnerOrAuthorized {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
 
         if (info.status == DataTypes.OracleStatus.Active ||
@@ -367,7 +378,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
      * receive a penalized reward. Called by owner (ClaimManager).
      * @param _oracle Oracle to reward
      */
-    function rewardOracle(address _oracle) external onlyOwner nonReentrant {
+    function rewardOracle(address _oracle) external onlyOwnerOrAuthorized nonReentrant {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(
             info.status == DataTypes.OracleStatus.Active ||
@@ -446,6 +457,14 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         return info.status == DataTypes.OracleStatus.Active &&
                info.withdrawRequestTime == 0;
+    }
+
+    // -------------------------------------------------------
+    //  Authorization
+    // -------------------------------------------------------
+
+    function setAuthorizedCaller(address _caller, bool _authorized) external onlyOwner {
+        authorizedCallers[_caller] = _authorized;
     }
 
     // -------------------------------------------------------

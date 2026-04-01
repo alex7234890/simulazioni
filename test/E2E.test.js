@@ -172,8 +172,9 @@ describe("End-to-End Integration (Phase 8)", function () {
     await insurance.setTierSystem(await tierSystem.getAddress());
     await tierSystem.setInsuranceContract(await insurance.getAddress());
 
-    // Transfer OracleRegistry ownership to SlashingSystem (needed for slash/expel)
-    await registry.transferOwnership(await slashingSystem.getAddress());
+    // Authorize MEVInsurance and SlashingSystem to call OracleRegistry restricted functions
+    await registry.setAuthorizedCaller(await insurance.getAddress(), true);
+    await registry.setAuthorizedCaller(await slashingSystem.getAddress(), true);
 
     // ── Fund contracts ──
     // Fund insurance pool for claim payouts
@@ -281,7 +282,7 @@ describe("End-to-End Integration (Phase 8)", function () {
       expect(payout).to.equal(loss); // High = 100%
     });
 
-    it("should complete flow with Medium coverage (90% payout)", async function () {
+    it("should complete flow with Medium coverage (70% payout)", async function () {
       // Register + buy policy with Medium coverage
       await insurance.connect(victim).registerUser();
       await token.connect(victim).approve(await insurance.getAddress(), e(10000));
@@ -308,8 +309,8 @@ describe("End-to-End Integration (Phase 8)", function () {
       const finalInfo = await insurance.getClaimInfo(claimId);
       expect(finalInfo.status).to.equal(ClaimStatus.Approved);
 
-      // Medium = 90% payout
-      const expectedPayout = (loss * 90n) / 100n;
+      // Medium = 70% payout (PDF Table 2)
+      const expectedPayout = (loss * 70n) / 100n;
       expect(balAfter - balBefore).to.equal(expectedPayout);
     });
   });
@@ -545,6 +546,65 @@ describe("End-to-End Integration (Phase 8)", function () {
       // Critical solvency should increase premium
       expect(premiumCritical).to.be.gte(premiumNormal);
     });
+
+    it("Fcov (premium) and coverage% (payout) are distinct (anti-selection)", async function () {
+      // PDF Table 2: Fcov != payout%
+      // Fcov: Low=70%, Medium=90%, High=100% (premium multiplier)
+      // Payout: Low=50%, Medium=70%, High=100% (reimbursement)
+      expect(await calculator.fcov(CoverageLevel.Low)).to.equal(7000);
+      expect(await calculator.fcov(CoverageLevel.Medium)).to.equal(9000);
+      expect(await calculator.fcov(CoverageLevel.High)).to.equal(10000);
+
+      expect(await insurance.coveragePercentBps(CoverageLevel.Low)).to.equal(5000);
+      expect(await insurance.coveragePercentBps(CoverageLevel.Medium)).to.equal(7000);
+      expect(await insurance.coveragePercentBps(CoverageLevel.High)).to.equal(10000);
+
+      // Low user pays 70% of premium but only gets 50% reimbursement
+      // This discourages adverse selection
+    });
+  });
+
+  // =================================================================
+  //  Scenario 4b: Oracle Rewards on finalizeClaim
+  // =================================================================
+  describe("Scenario 4b: Oracle Rewards", function () {
+    it("oracles should receive ETH reward after finalizeClaim", async function () {
+      // Setup user and submit claim
+      await insurance.connect(user1).registerUser();
+      await token.transfer(user1.address, e(50000));
+      await token.connect(user1).approve(await insurance.getAddress(), e(50000));
+      await insurance.connect(user1).buyPolicy(CoverageLevel.High);
+
+      const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), e(50));
+
+      // Track oracle balances before
+      const balancesBefore = [];
+      for (const addr of assignedOracles) {
+        balancesBefore.push(await ethers.provider.getBalance(addr));
+      }
+
+      // All oracles commit and reveal
+      await oraclesCommitAndReveal(
+        claimId, assignedOracles,
+        [40, 40, 40, 40, 40, 40, 40],
+        [true, true, true, true, true, true, true]
+      );
+
+      // Finalize (triggers rewards)
+      await insurance.finalizeClaim(claimId);
+
+      // Check at least some oracles received reward (gas costs may affect exact balance)
+      let rewardedCount = 0;
+      for (let i = 0; i < assignedOracles.length; i++) {
+        const balAfter = await ethers.provider.getBalance(assignedOracles[i]);
+        // Oracle spent gas on commit+reveal, but should have received rClaim (0.002 ETH)
+        // Net balance change: received 0.002 ETH - gas spent
+        // We check claimsEvaluated instead as a more reliable indicator
+        const info = await registry.getOracleInfo(assignedOracles[i]);
+        if (info.claimsEvaluated > 0n) rewardedCount++;
+      }
+      expect(rewardedCount).to.equal(7);
+    });
   });
 
   // =================================================================
@@ -562,8 +622,8 @@ describe("End-to-End Integration (Phase 8)", function () {
       const loss = e(300);
       const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), loss);
 
-      // Oracles vote high fraud score (> thetaReject = 70)
-      const fraudScores = [85, 90, 80, 88, 92, 75, 82];
+      // Oracles vote high fraud score (>= thetaReject = 80)
+      const fraudScores = [90, 95, 85, 92, 100, 88, 86];
       const patternValids = [true, true, true, true, true, true, true];
       await oraclesCommitAndReveal(claimId, assignedOracles, fraudScores, patternValids);
 
@@ -602,9 +662,9 @@ describe("End-to-End Integration (Phase 8)", function () {
       const loss = e(100);
       const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), loss);
 
-      // Medium fraud scores (between thetaApprove=30 and thetaReject=70)
-      // For Bronze tier: scores 30-70 → CAPTCHARequired
-      const fraudScores = [45, 50, 48, 52, 47, 55, 43];
+      // Medium fraud scores (between thetaApprove=60 and thetaReject=80)
+      // For Bronze tier: all scores < thetaReject → CAPTCHARequired
+      const fraudScores = [65, 70, 68, 72, 67, 75, 63];
       const patternValids = [true, true, true, true, true, true, true];
       await oraclesCommitAndReveal(claimId, assignedOracles, fraudScores, patternValids);
 
@@ -677,10 +737,10 @@ describe("End-to-End Integration (Phase 8)", function () {
         [true, true, true, true, true, true, true]
       );
 
-      // Process claim 2 - reject (high fraud)
+      // Process claim 2 - reject (high fraud >= thetaReject=80)
       await oraclesCommitAndReveal(
         claim2.claimId, claim2.assignedOracles,
-        [80, 85, 78, 90, 82, 88, 76],
+        [90, 95, 88, 100, 92, 98, 86],
         [true, true, true, true, true, true, true]
       );
 

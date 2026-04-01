@@ -3,46 +3,31 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("PattUpdater", function () {
-  let registry;
-  let premiumCalc;
-  let pattUpdater;
-  let owner;
-  let o1, o2, o3, o4, o5, o6, o7;
+  let registry, calculator, pattUpdater;
+  let owner, user1;
+  let o1, o2, o3, o4, o5, o6, o7, o8;
 
-  const BASE_STAKE = ethers.parseEther("0.1");
+  const e = (n) => ethers.parseEther(String(n));
+  const BASE_STAKE = e("0.1");
   const T_ACTIVATION = 7 * 24 * 60 * 60;
   const COMMIT_TIMEOUT = 2 * 24 * 60 * 60;
   const REVEAL_TIMEOUT = 2 * 24 * 60 * 60;
-  const UPDATE_INTERVAL = 1 * 24 * 60 * 60;
-  const ORACLE_REWARD = ethers.parseEther("0.002");
 
-  const UpdateStatus = { None: 0, Committing: 1, Revealing: 2, Finalized: 3 };
-
-  // Helper: commit a Patt estimate
-  async function commitEstimate(roundId, oracle, estimate, salt) {
-    const hash = ethers.solidityPackedKeccak256(
-      ["uint16", "bytes32"],
-      [estimate, salt]
+  function computeCommitHash(pattEstimate, datasetHash, salt) {
+    return ethers.solidityPackedKeccak256(
+      ["uint16", "bytes32", "bytes32"],
+      [pattEstimate, datasetHash, salt]
     );
-    await pattUpdater.connect(oracle).commitEstimate(roundId, hash);
   }
 
-  // Helper: reveal a Patt estimate
-  async function revealEstimate(roundId, oracle, estimate, salt) {
-    await pattUpdater.connect(oracle).revealEstimate(roundId, estimate, salt);
-  }
+  const allOracles = () => [o1, o2, o3, o4, o5, o6, o7, o8];
 
-  // Helper: get signers for a round's assigned oracles
-  async function getJurorSigners(roundId) {
-    const addresses = await pattUpdater.getRoundOracles(roundId);
-    const allOracles = [o1, o2, o3, o4, o5, o6, o7];
-    return addresses.map(addr =>
-      allOracles.find(s => s.address.toLowerCase() === addr.toLowerCase())
-    );
+  async function findSigner(address) {
+    return allOracles().find(s => s.address === address);
   }
 
   beforeEach(async function () {
-    [owner, o1, o2, o3, o4, o5, o6, o7] = await ethers.getSigners();
+    [owner, user1, o1, o2, o3, o4, o5, o6, o7, o8] = await ethers.getSigners();
 
     // Deploy OracleRegistry
     const OracleRegistry = await ethers.getContractFactory("OracleRegistry");
@@ -51,632 +36,403 @@ describe("PattUpdater", function () {
 
     // Deploy PremiumCalculator
     const PremiumCalculator = await ethers.getContractFactory("PremiumCalculator");
-    premiumCalc = await PremiumCalculator.deploy();
-    await premiumCalc.waitForDeployment();
+    calculator = await PremiumCalculator.deploy();
+    await calculator.waitForDeployment();
 
     // Deploy PattUpdater
     const PattUpdater = await ethers.getContractFactory("PattUpdater");
     pattUpdater = await PattUpdater.deploy(
       await registry.getAddress(),
-      await premiumCalc.getAddress()
+      await calculator.getAddress()
     );
     await pattUpdater.waitForDeployment();
 
-    // Transfer PremiumCalculator ownership to PattUpdater so it can call setPatt
-    await premiumCalc.transferOwnership(await pattUpdater.getAddress());
+    // Authorize PattUpdater to call setPatt on calculator
+    await calculator.setAuthorizedUpdater(await pattUpdater.getAddress());
 
-    // Register and activate 7 oracles (need >=5 for selection)
-    const oracles = [o1, o2, o3, o4, o5, o6, o7];
-    for (const o of oracles) {
-      const minStake = await registry.getMinimumStake();
-      const stakeVal = minStake > BASE_STAKE ? minStake : BASE_STAKE;
-      await registry.connect(o).registerOracle({ value: stakeVal });
+    // Register and activate 8 oracles
+    for (const o of allOracles()) {
+      const stake = await registry.getMinimumStake();
+      await registry.connect(o).registerOracle({ value: stake });
     }
-    await time.increase(T_ACTIVATION);
-    for (const o of oracles) {
+    await time.increase(T_ACTIVATION + 1);
+    for (const o of allOracles()) {
       await registry.connect(o).activateOracle();
     }
-
-    // Fund PattUpdater for oracle rewards
-    await owner.sendTransaction({
-      to: await pattUpdater.getAddress(),
-      value: ethers.parseEther("1.0"),
-    });
   });
 
-  describe("Start Update Round", function () {
-    it("should start a Patt update round", async function () {
-      await pattUpdater.startPattUpdate();
+  describe("Round Management", function () {
+    it("should start a new round and select oracles", async function () {
+      await pattUpdater.startRound();
       expect(await pattUpdater.getRoundsCount()).to.equal(1);
 
-      const [status, , , , timestamp] = await pattUpdater.getRoundInfo(0);
-      expect(status).to.equal(UpdateStatus.Committing);
-      expect(timestamp).to.be.gt(0);
-    });
-
-    it("should select nOraclePatt oracles", async function () {
-      await pattUpdater.startPattUpdate();
       const oracles = await pattUpdater.getRoundOracles(0);
-      expect(oracles.length).to.equal(5);
+      expect(oracles.length).to.equal(7); // nPattOracles default
     });
 
-    it("should emit PattUpdateStarted event", async function () {
-      await expect(pattUpdater.startPattUpdate())
-        .to.emit(pattUpdater, "PattUpdateStarted");
+    it("should emit RoundStarted event", async function () {
+      await expect(pattUpdater.startRound())
+        .to.emit(pattUpdater, "RoundStarted");
     });
 
-    it("should revert if previous round still active", async function () {
-      await pattUpdater.startPattUpdate();
-      await expect(pattUpdater.startPattUpdate())
-        .to.be.revertedWith("Previous round still active");
-    });
-
-    it("should revert if update interval not elapsed", async function () {
-      await pattUpdater.startPattUpdate();
-
-      // Finalize to complete the round
-      const jurors = await getJurorSigners(0);
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
-      await pattUpdater.finalizePattUpdate(0);
-
-      // Try to start again immediately
-      await expect(pattUpdater.startPattUpdate())
-        .to.be.revertedWith("Update interval not elapsed");
-    });
-
-    it("should allow new round after interval", async function () {
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
-      await pattUpdater.finalizePattUpdate(0);
-
-      await time.increase(UPDATE_INTERVAL);
-      await pattUpdater.startPattUpdate();
-      expect(await pattUpdater.getRoundsCount()).to.equal(2);
-    });
-
-    it("should only allow owner to start", async function () {
+    it("only owner can start round", async function () {
       await expect(
-        pattUpdater.connect(o1).startPattUpdate()
+        pattUpdater.connect(user1).startRound()
       ).to.be.revertedWithCustomError(pattUpdater, "OwnableUnauthorizedAccount");
     });
   });
 
-  describe("Commit Phase", function () {
-    let jurors;
+  describe("Commit-Reveal", function () {
+    let roundId, assignedOracles;
 
     beforeEach(async function () {
-      await pattUpdater.startPattUpdate();
-      jurors = await getJurorSigners(0);
+      await pattUpdater.startRound();
+      roundId = 0;
+      assignedOracles = await pattUpdater.getRoundOracles(roundId);
     });
 
     it("should allow assigned oracle to commit", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await commitEstimate(0, jurors[0], 500, salt);
+      const signer = await findSigner(assignedOracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("blocks_100_200"));
+      const hash = computeCommitHash(500, datasetHash, salt);
 
-      const [, commitCount] = await pattUpdater.getRoundInfo(0);
-      expect(commitCount).to.equal(1);
+      await expect(pattUpdater.connect(signer).commitPattEstimate(roundId, hash))
+        .to.emit(pattUpdater, "PattCommitted")
+        .withArgs(roundId, signer.address);
     });
 
-    it("should emit PattEstimateCommitted event", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      const hash = ethers.solidityPackedKeccak256(["uint16", "bytes32"], [500, salt]);
-      await expect(pattUpdater.connect(jurors[0]).commitEstimate(0, hash))
-        .to.emit(pattUpdater, "PattEstimateCommitted")
-        .withArgs(0, jurors[0].address);
-    });
-
-    it("should revert if not assigned oracle", async function () {
-      // Find an oracle not in the round
-      const assignedAddrs = (await pattUpdater.getRoundOracles(0)).map(a => a.toLowerCase());
-      const allOracles = [o1, o2, o3, o4, o5, o6, o7];
-      const notAssigned = allOracles.find(o => !assignedAddrs.includes(o.address.toLowerCase()));
-
-      if (notAssigned) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
-        const hash = ethers.solidityPackedKeccak256(["uint16", "bytes32"], [500, salt]);
+    it("should revert commit from non-assigned oracle", async function () {
+      // Find an oracle NOT in assignedOracles
+      let nonAssigned;
+      for (const o of allOracles()) {
+        if (!assignedOracles.includes(o.address)) {
+          nonAssigned = o;
+          break;
+        }
+      }
+      if (nonAssigned) {
+        const hash = ethers.keccak256(ethers.toUtf8Bytes("dummy"));
         await expect(
-          pattUpdater.connect(notAssigned).commitEstimate(0, hash)
+          pattUpdater.connect(nonAssigned).commitPattEstimate(roundId, hash)
         ).to.be.revertedWith("Not assigned oracle");
       }
     });
 
     it("should revert double commit", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await commitEstimate(0, jurors[0], 500, salt);
-
-      const hash2 = ethers.solidityPackedKeccak256(
-        ["uint16", "bytes32"], [600, salt]
-      );
+      const signer = await findSigner(assignedOracles[0]);
+      const hash = ethers.keccak256(ethers.toUtf8Bytes("dummy"));
+      await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
       await expect(
-        pattUpdater.connect(jurors[0]).commitEstimate(0, hash2)
+        pattUpdater.connect(signer).commitPattEstimate(roundId, hash)
       ).to.be.revertedWith("Already committed");
-    });
-
-    it("should revert with empty hash", async function () {
-      await expect(
-        pattUpdater.connect(jurors[0]).commitEstimate(0, ethers.ZeroHash)
-      ).to.be.revertedWith("Empty hash");
     });
 
     it("should revert commit after timeout", async function () {
       await time.increase(COMMIT_TIMEOUT + 1);
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      const hash = ethers.solidityPackedKeccak256(["uint16", "bytes32"], [500, salt]);
+      const signer = await findSigner(assignedOracles[0]);
+      const hash = ethers.keccak256(ethers.toUtf8Bytes("dummy"));
       await expect(
-        pattUpdater.connect(jurors[0]).commitEstimate(0, hash)
-      ).to.be.revertedWith("Commit period expired");
+        pattUpdater.connect(signer).commitPattEstimate(roundId, hash)
+      ).to.be.revertedWith("Commit timeout");
     });
 
-    it("should transition to Revealing when all committed", async function () {
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      const [status] = await pattUpdater.getRoundInfo(0);
-      expect(status).to.equal(UpdateStatus.Revealing);
-    });
-  });
+    it("should allow reveal after commit", async function () {
+      const signer = await findSigner(assignedOracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("blocks_100_200"));
+      const pattEstimate = 500; // 5%
+      const hash = computeCommitHash(pattEstimate, datasetHash, salt);
 
-  describe("Reveal Phase", function () {
-    let jurors;
-
-    beforeEach(async function () {
-      await pattUpdater.startPattUpdate();
-      jurors = await getJurorSigners(0);
-
-      // All commit
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500 + i * 100, salt);
-      }
-    });
-
-    it("should allow oracle to reveal", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await revealEstimate(0, jurors[0], 500, salt);
-
-      const [, , revealCount] = await pattUpdater.getRoundInfo(0);
-      expect(revealCount).to.equal(1);
-    });
-
-    it("should emit PattEstimateRevealed event", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await expect(pattUpdater.connect(jurors[0]).revealEstimate(0, 500, salt))
-        .to.emit(pattUpdater, "PattEstimateRevealed")
-        .withArgs(0, jurors[0].address, 500);
-    });
-
-    it("should revert with hash mismatch", async function () {
-      const wrongSalt = ethers.keccak256(ethers.toUtf8Bytes("wrong"));
+      await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
       await expect(
-        revealEstimate(0, jurors[0], 500, wrongSalt)
+        pattUpdater.connect(signer).revealPattEstimate(roundId, pattEstimate, datasetHash, salt)
+      ).to.emit(pattUpdater, "PattRevealed")
+        .withArgs(roundId, signer.address, pattEstimate, datasetHash);
+    });
+
+    it("should revert reveal with wrong hash", async function () {
+      const signer = await findSigner(assignedOracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("blocks_100_200"));
+      const hash = computeCommitHash(500, datasetHash, salt);
+
+      await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
+      await expect(
+        pattUpdater.connect(signer).revealPattEstimate(roundId, 600, datasetHash, salt)
       ).to.be.revertedWith("Hash mismatch");
-    });
-
-    it("should revert with wrong estimate", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await expect(
-        revealEstimate(0, jurors[0], 999, salt) // committed 500
-      ).to.be.revertedWith("Hash mismatch");
-    });
-
-    it("should revert double reveal", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await revealEstimate(0, jurors[0], 500, salt);
-      await expect(
-        revealEstimate(0, jurors[0], 500, salt)
-      ).to.be.revertedWith("Already revealed");
     });
 
     it("should revert reveal without commit", async function () {
-      // Find unassigned oracle — this test may not work if all 5 are assigned
-      // Instead test with an oracle that somehow skipped commit (not possible in practice)
-      // We'll test the "Not committed" path via a fresh round
-    });
-
-    it("should revert estimate > 10000", async function () {
-      // Need to commit with 10001 first
-      // Since we can't commit 10001 as uint16 (max 65535), let's test the boundary
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt_overflow"));
-      // This oracle already committed 500, so this will fail with "Already committed"
-      // We'd need a separate round for this edge case
-    });
-
-    it("should revert reveal after timeout", async function () {
-      await time.increase(COMMIT_TIMEOUT + REVEAL_TIMEOUT + 1);
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
+      const signer = await findSigner(assignedOracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("blocks"));
       await expect(
-        revealEstimate(0, jurors[0], 500, salt)
-      ).to.be.revertedWith("Reveal period expired");
+        pattUpdater.connect(signer).revealPattEstimate(roundId, 500, datasetHash, salt)
+      ).to.be.revertedWith("Not committed");
+    });
+
+    it("should revert patt estimate > 10000", async function () {
+      const signer = await findSigner(assignedOracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("blocks"));
+      const hash = computeCommitHash(10001, datasetHash, salt);
+
+      await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
+      await expect(
+        pattUpdater.connect(signer).revealPattEstimate(roundId, 10001, datasetHash, salt)
+      ).to.be.revertedWith("Patt must be 0-10000 bps");
+    });
+
+    it("should store dataset hash on reveal", async function () {
+      const signer = await findSigner(assignedOracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("blocks_100_200"));
+      const hash = computeCommitHash(500, datasetHash, salt);
+
+      await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
+      await pattUpdater.connect(signer).revealPattEstimate(roundId, 500, datasetHash, salt);
+
+      expect(await pattUpdater.datasetHashes(roundId, signer.address)).to.equal(datasetHash);
     });
   });
 
   describe("Finalization", function () {
-    let jurors;
+    let roundId, assignedOracles;
+
+    async function commitAndRevealAll(estimates) {
+      for (let i = 0; i < assignedOracles.length; i++) {
+        const signer = await findSigner(assignedOracles[i]);
+        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt_${i}`));
+        const datasetHash = ethers.keccak256(ethers.toUtf8Bytes(`dataset_${i}`));
+        const hash = computeCommitHash(estimates[i], datasetHash, salt);
+        await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
+      }
+      for (let i = 0; i < assignedOracles.length; i++) {
+        const signer = await findSigner(assignedOracles[i]);
+        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt_${i}`));
+        const datasetHash = ethers.keccak256(ethers.toUtf8Bytes(`dataset_${i}`));
+        await pattUpdater.connect(signer).revealPattEstimate(roundId, estimates[i], datasetHash, salt);
+      }
+    }
 
     beforeEach(async function () {
-      await pattUpdater.startPattUpdate();
-      jurors = await getJurorSigners(0);
+      await pattUpdater.startRound();
+      roundId = 0;
+      assignedOracles = await pattUpdater.getRoundOracles(roundId);
     });
 
-    it("should finalize with all reveals and update Patt", async function () {
+    it("should finalize with ms=20% when volume < 1000 (default)", async function () {
       // All oracles estimate 500 bps (5%)
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
+      const estimates = [500, 500, 500, 500, 500, 500, 500];
+      await commitAndRevealAll(estimates);
+      await pattUpdater.finalizePattUpdate(roundId);
 
-      await pattUpdater.finalizePattUpdate(0);
+      // finalPatt = 500 * (10000 + 2000) / 10000 = 500 * 1.2 = 600
+      const round = await pattUpdater.rounds(roundId);
+      expect(round.finalPatt).to.equal(600);
+      expect(round.finalized).to.be.true;
 
-      const [status, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      expect(status).to.equal(UpdateStatus.Finalized);
-      // median = 500, + ms(200) = 700
-      expect(finalPatt).to.equal(700);
-
-      // Check PremiumCalculator was updated
-      expect(await premiumCalc.patt()).to.equal(700);
+      // PremiumCalculator should be updated
+      expect(await calculator.patt()).to.equal(600);
     });
 
-    it("should emit PattUpdateFinalized event", async function () {
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
+    it("should finalize with ms=10% when 1000 <= volume < 10000", async function () {
+      await pattUpdater.updateVolumeSwaps(5000);
+      const estimates = [500, 500, 500, 500, 500, 500, 500];
+      await commitAndRevealAll(estimates);
+      await pattUpdater.finalizePattUpdate(roundId);
 
-      await expect(pattUpdater.finalizePattUpdate(0))
-        .to.emit(pattUpdater, "PattUpdateFinalized")
-        .withArgs(0, 500, 700); // median=500, final=500+200=700
+      // finalPatt = 500 * (10000 + 1000) / 10000 = 500 * 1.1 = 550
+      const round = await pattUpdater.rounds(roundId);
+      expect(round.finalPatt).to.equal(550);
     });
 
-    it("should calculate correct median with varied estimates", async function () {
-      // Estimates: [300, 400, 500, 600, 700] -> sorted: [300,400,500,600,700] -> median=500
-      const estimates = [300, 400, 500, 600, 700];
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], estimates[i], salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], estimates[i], salt);
-      }
+    it("should finalize with ms=5% when volume >= 10000", async function () {
+      await pattUpdater.updateVolumeSwaps(15000);
+      const estimates = [500, 500, 500, 500, 500, 500, 500];
+      await commitAndRevealAll(estimates);
+      await pattUpdater.finalizePattUpdate(roundId);
 
-      await pattUpdater.finalizePattUpdate(0);
-      const [, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      // median=500, + ms=200, = 700
-      expect(finalPatt).to.equal(700);
+      // finalPatt = 500 * (10000 + 500) / 10000 = 500 * 1.05 = 525
+      const round = await pattUpdater.rounds(roundId);
+      expect(round.finalPatt).to.equal(525);
     });
 
-    it("should calculate correct median with skewed estimates", async function () {
-      // Estimates: [100, 100, 100, 800, 900] -> median=100
-      const estimates = [100, 100, 100, 800, 900];
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], estimates[i], salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], estimates[i], salt);
-      }
+    it("should compute median correctly with varied estimates", async function () {
+      // Estimates: [300, 400, 500, 600, 700, 800, 900] -> median = 600
+      const estimates = [700, 300, 900, 500, 400, 800, 600];
+      await commitAndRevealAll(estimates);
 
-      await pattUpdater.finalizePattUpdate(0);
-      const [, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      // median=100, + ms=200, = 300
-      expect(finalPatt).to.equal(300);
+      // Default volume = 0 -> ms = 2000 (20%)
+      await pattUpdater.finalizePattUpdate(roundId);
+
+      // finalPatt = 600 * (10000 + 2000) / 10000 = 720
+      const round = await pattUpdater.rounds(roundId);
+      expect(round.finalPatt).to.equal(720);
     });
 
-    it("should cap Patt at 10000 (100%)", async function () {
-      // All estimate 9900 -> median=9900, + ms=200 = 10100, capped to 10000
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 9900, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 9900, salt);
-      }
+    it("should emit PattFinalized event", async function () {
+      const estimates = [500, 500, 500, 500, 500, 500, 500];
+      await commitAndRevealAll(estimates);
 
-      await pattUpdater.finalizePattUpdate(0);
-      const [, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      expect(finalPatt).to.equal(10000);
+      await expect(pattUpdater.finalizePattUpdate(roundId))
+        .to.emit(pattUpdater, "PattFinalized")
+        .withArgs(roundId, 500, 2000, 600);
     });
 
-    it("should finalize with partial reveals after timeout", async function () {
-      // Only 3 of 5 oracles commit and reveal
-      for (let i = 0; i < 3; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 400 + i * 100, salt);
-      }
-      for (let i = 0; i < 3; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 400 + i * 100, salt);
-      }
-
-      // Wait for timeout
-      await time.increase(COMMIT_TIMEOUT + REVEAL_TIMEOUT + 1);
-
-      await pattUpdater.finalizePattUpdate(0);
-      const [status, , revealCount, finalPatt] = await pattUpdater.getRoundInfo(0);
-      expect(status).to.equal(UpdateStatus.Finalized);
-      expect(revealCount).to.equal(3);
-      // Estimates: [400, 500, 600] -> median=500, + ms=200 = 700
-      expect(finalPatt).to.equal(700);
-    });
-
-    it("should revert before timeout with incomplete reveals", async function () {
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await commitEstimate(0, jurors[0], 500, salt);
-      await revealEstimate(0, jurors[0], 500, salt);
+    it("should revert if finalized twice", async function () {
+      const estimates = [500, 500, 500, 500, 500, 500, 500];
+      await commitAndRevealAll(estimates);
+      await pattUpdater.finalizePattUpdate(roundId);
 
       await expect(
-        pattUpdater.finalizePattUpdate(0)
+        pattUpdater.finalizePattUpdate(roundId)
+      ).to.be.revertedWith("Already finalized");
+    });
+
+    it("should finalize after timeout with partial reveals", async function () {
+      // Only 4 out of 7 oracles reveal
+      for (let i = 0; i < 4; i++) {
+        const signer = await findSigner(assignedOracles[i]);
+        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt_${i}`));
+        const datasetHash = ethers.keccak256(ethers.toUtf8Bytes(`dataset_${i}`));
+        const hash = computeCommitHash(500, datasetHash, salt);
+        await pattUpdater.connect(signer).commitPattEstimate(roundId, hash);
+        await pattUpdater.connect(signer).revealPattEstimate(roundId, 500, datasetHash, salt);
+      }
+
+      // Can't finalize yet
+      await expect(
+        pattUpdater.finalizePattUpdate(roundId)
       ).to.be.revertedWith("Reveal phase not complete");
+
+      // After timeout
+      await time.increase(COMMIT_TIMEOUT + REVEAL_TIMEOUT + 1);
+      await pattUpdater.finalizePattUpdate(roundId);
+
+      const round = await pattUpdater.rounds(roundId);
+      expect(round.finalized).to.be.true;
     });
 
     it("should revert with zero reveals after timeout", async function () {
       await time.increase(COMMIT_TIMEOUT + REVEAL_TIMEOUT + 1);
       await expect(
-        pattUpdater.finalizePattUpdate(0)
-      ).to.be.revertedWith("No reveals received");
-    });
-
-    it("should revert double finalization", async function () {
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
-
-      await pattUpdater.finalizePattUpdate(0);
-      await expect(pattUpdater.finalizePattUpdate(0))
-        .to.be.revertedWith("Round not active");
+        pattUpdater.finalizePattUpdate(roundId)
+      ).to.be.revertedWith("No reveals");
     });
   });
 
-  describe("Oracle Rewards", function () {
-    it("should reward oracles that revealed", async function () {
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
-
-      // Track balances before
-      const balancesBefore = [];
-      for (const j of jurors) {
-        balancesBefore.push(await ethers.provider.getBalance(j.address));
-      }
-
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
-
-      // Finalize triggers rewards
-      const tx = await pattUpdater.finalizePattUpdate(0);
-      const receipt = await tx.wait();
-
-      // Check OracleRewarded events were emitted
-      const rewardEvents = receipt.logs.filter(log => {
-        try {
-          const parsed = pattUpdater.interface.parseLog(log);
-          return parsed && parsed.name === "OracleRewarded";
-        } catch { return false; }
-      });
-      expect(rewardEvents.length).to.equal(5); // All 5 oracles rewarded
+  describe("Safety Margin", function () {
+    it("should return ms=2000 for volume 0", async function () {
+      expect(await pattUpdater.getSafetyMargin()).to.equal(2000);
     });
 
-    it("should only reward oracles that revealed (partial)", async function () {
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
+    it("should return ms=2000 for volume 999", async function () {
+      await pattUpdater.updateVolumeSwaps(999);
+      expect(await pattUpdater.getSafetyMargin()).to.equal(2000);
+    });
 
-      // Only 3 commit and reveal
-      for (let i = 0; i < 3; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < 3; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
+    it("should return ms=1000 for volume 1000", async function () {
+      await pattUpdater.updateVolumeSwaps(1000);
+      expect(await pattUpdater.getSafetyMargin()).to.equal(1000);
+    });
 
-      await time.increase(COMMIT_TIMEOUT + REVEAL_TIMEOUT + 1);
+    it("should return ms=1000 for volume 9999", async function () {
+      await pattUpdater.updateVolumeSwaps(9999);
+      expect(await pattUpdater.getSafetyMargin()).to.equal(1000);
+    });
 
-      const tx = await pattUpdater.finalizePattUpdate(0);
-      const receipt = await tx.wait();
+    it("should return ms=500 for volume 10000", async function () {
+      await pattUpdater.updateVolumeSwaps(10000);
+      expect(await pattUpdater.getSafetyMargin()).to.equal(500);
+    });
 
-      const rewardEvents = receipt.logs.filter(log => {
-        try {
-          const parsed = pattUpdater.interface.parseLog(log);
-          return parsed && parsed.name === "OracleRewarded";
-        } catch { return false; }
-      });
-      expect(rewardEvents.length).to.equal(3); // Only 3 revealed
+    it("should return ms=500 for volume 50000", async function () {
+      await pattUpdater.updateVolumeSwaps(50000);
+      expect(await pattUpdater.getSafetyMargin()).to.equal(500);
     });
   });
 
-  describe("Multiple Rounds", function () {
-    it("should support sequential update rounds", async function () {
-      // Round 0
-      await pattUpdater.startPattUpdate();
-      let jurors = await getJurorSigners(0);
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`r0salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`r0salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
-      await pattUpdater.finalizePattUpdate(0);
-      expect(await premiumCalc.patt()).to.equal(700); // 500 + 200
+  describe("Volume Updates", function () {
+    it("should update volume", async function () {
+      await pattUpdater.updateVolumeSwaps(12345);
+      expect(await pattUpdater.volumeSwaps()).to.equal(12345);
+    });
 
-      // Wait for interval
-      await time.increase(UPDATE_INTERVAL);
+    it("should emit VolumeSwapsUpdated", async function () {
+      await expect(pattUpdater.updateVolumeSwaps(5000))
+        .to.emit(pattUpdater, "VolumeSwapsUpdated")
+        .withArgs(5000);
+    });
 
-      // Round 1 with different estimates
-      await pattUpdater.startPattUpdate();
-      jurors = await getJurorSigners(1);
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`r1salt${i}`));
-        await commitEstimate(1, jurors[i], 300, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`r1salt${i}`));
-        await revealEstimate(1, jurors[i], 300, salt);
-      }
-      await pattUpdater.finalizePattUpdate(1);
-      expect(await premiumCalc.patt()).to.equal(500); // 300 + 200
-
-      expect(await pattUpdater.getRoundsCount()).to.equal(2);
+    it("only owner can update volume", async function () {
+      await expect(
+        pattUpdater.connect(user1).updateVolumeSwaps(100)
+      ).to.be.revertedWithCustomError(pattUpdater, "OwnableUnauthorizedAccount");
     });
   });
 
   describe("Parameter Setters", function () {
-    it("should update nOraclePatt", async function () {
-      await pattUpdater.setNOraclePatt(3);
-      expect(await pattUpdater.nOraclePatt()).to.equal(3);
+    it("should update nPattOracles", async function () {
+      await pattUpdater.setNPattOracles(5);
+      expect(await pattUpdater.nPattOracles()).to.equal(5);
     });
 
-    it("should update ms", async function () {
-      await pattUpdater.setMs(500);
-      expect(await pattUpdater.ms()).to.equal(500);
+    it("should update commit timeout", async function () {
+      await pattUpdater.setCommitTimeout(86400);
+      expect(await pattUpdater.commitTimeout()).to.equal(86400);
     });
 
-    it("should update commitTimeout", async function () {
-      await pattUpdater.setCommitTimeout(3 * 24 * 60 * 60);
-      expect(await pattUpdater.commitTimeout()).to.equal(3 * 24 * 60 * 60);
+    it("should update reveal timeout", async function () {
+      await pattUpdater.setRevealTimeout(86400);
+      expect(await pattUpdater.revealTimeout()).to.equal(86400);
     });
 
-    it("should update revealTimeout", async function () {
-      await pattUpdater.setRevealTimeout(3 * 24 * 60 * 60);
-      expect(await pattUpdater.revealTimeout()).to.equal(3 * 24 * 60 * 60);
+    it("should update safety margin values", async function () {
+      await pattUpdater.setMsHigh(300);
+      await pattUpdater.setMsMedium(800);
+      await pattUpdater.setMsLow(1500);
+      expect(await pattUpdater.msHigh()).to.equal(300);
+      expect(await pattUpdater.msMedium()).to.equal(800);
+      expect(await pattUpdater.msLow()).to.equal(1500);
     });
 
-    it("should update updateInterval", async function () {
-      await pattUpdater.setUpdateInterval(12 * 60 * 60);
-      expect(await pattUpdater.updateInterval()).to.equal(12 * 60 * 60);
+    it("should update volume thresholds", async function () {
+      await pattUpdater.setVolumeHighThreshold(20000);
+      await pattUpdater.setVolumeLowThreshold(2000);
+      expect(await pattUpdater.volumeHighThreshold()).to.equal(20000);
+      expect(await pattUpdater.volumeLowThreshold()).to.equal(2000);
     });
 
-    it("should update oracleReward", async function () {
-      const newReward = ethers.parseEther("0.005");
-      await pattUpdater.setOracleReward(newReward);
-      expect(await pattUpdater.oracleReward()).to.equal(newReward);
-    });
-
-    it("should only allow owner to set parameters", async function () {
+    it("non-owner cannot set parameters", async function () {
       await expect(
-        pattUpdater.connect(o1).setMs(100)
+        pattUpdater.connect(user1).setNPattOracles(3)
       ).to.be.revertedWithCustomError(pattUpdater, "OwnableUnauthorizedAccount");
     });
   });
 
   describe("View Functions", function () {
-    it("should return rounds count", async function () {
+    it("should return round count", async function () {
       expect(await pattUpdater.getRoundsCount()).to.equal(0);
-      await pattUpdater.startPattUpdate();
+      await pattUpdater.startRound();
       expect(await pattUpdater.getRoundsCount()).to.equal(1);
     });
 
-    it("should return round estimates", async function () {
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
+    it("should return round estimates after reveals", async function () {
+      await pattUpdater.startRound();
+      const oracles = await pattUpdater.getRoundOracles(0);
+      const signer = await findSigner(oracles[0]);
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const datasetHash = ethers.keccak256(ethers.toUtf8Bytes("data"));
+      const hash = computeCommitHash(500, datasetHash, salt);
 
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500 + i * 50, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500 + i * 50, salt);
-      }
+      await pattUpdater.connect(signer).commitPattEstimate(0, hash);
+      await pattUpdater.connect(signer).revealPattEstimate(0, 500, datasetHash, salt);
 
       const estimates = await pattUpdater.getRoundEstimates(0);
-      expect(estimates.length).to.equal(5);
-    });
-  });
-
-  describe("Edge Cases", function () {
-    it("should handle all oracles estimating 0", async function () {
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
-
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 0, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 0, salt);
-      }
-
-      await pattUpdater.finalizePattUpdate(0);
-      const [, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      // median=0, + ms=200 = 200
-      expect(finalPatt).to.equal(200);
-      expect(await premiumCalc.patt()).to.equal(200);
-    });
-
-    it("should handle single reveal after timeout", async function () {
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
-
-      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
-      await commitEstimate(0, jurors[0], 800, salt);
-      await revealEstimate(0, jurors[0], 800, salt);
-
-      await time.increase(COMMIT_TIMEOUT + REVEAL_TIMEOUT + 1);
-      await pattUpdater.finalizePattUpdate(0);
-
-      const [, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      // Single estimate: median=800, + ms=200 = 1000
-      expect(finalPatt).to.equal(1000);
-    });
-
-    it("should handle ms = 0", async function () {
-      await pattUpdater.setMs(0);
-
-      await pattUpdater.startPattUpdate();
-      const jurors = await getJurorSigners(0);
-
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await commitEstimate(0, jurors[i], 500, salt);
-      }
-      for (let i = 0; i < jurors.length; i++) {
-        const salt = ethers.keccak256(ethers.toUtf8Bytes(`salt${i}`));
-        await revealEstimate(0, jurors[i], 500, salt);
-      }
-
-      await pattUpdater.finalizePattUpdate(0);
-      const [, , , finalPatt] = await pattUpdater.getRoundInfo(0);
-      expect(finalPatt).to.equal(500); // No margin
+      expect(estimates.length).to.equal(1);
+      expect(estimates[0]).to.equal(500);
     });
   });
 });
