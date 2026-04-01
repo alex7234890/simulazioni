@@ -87,6 +87,9 @@ contract PremiumCalculator is Ownable {
     /// @dev High margin delta in basis points (1000 = 10%)
     uint256 public deltaMhigh = 1000;
 
+    /// @dev Authorized updater (e.g. PattUpdater contract) that can call setPatt
+    address public authorizedUpdater;
+
     // -------------------------------------------------------
     //  Events
     // -------------------------------------------------------
@@ -256,9 +259,14 @@ contract PremiumCalculator is Ownable {
     //  Parameter Setters (owner only)
     // -------------------------------------------------------
 
-    function setPatt(uint256 _val) external onlyOwner {
+    function setPatt(uint256 _val) external {
+        require(msg.sender == owner() || msg.sender == authorizedUpdater, "Not owner or authorized updater");
         patt = _val;
         emit PattUpdated(_val);
+    }
+
+    function setAuthorizedUpdater(address _updater) external onlyOwner {
+        authorizedUpdater = _updater;
     }
 
     function setLPercent(uint256 _val) external onlyOwner {
