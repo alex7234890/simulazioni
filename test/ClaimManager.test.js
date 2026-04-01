@@ -704,8 +704,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       expect(info.status).to.equal(ClaimStatus.Approved);
 
       const balanceAfter = await token.balanceOf(user1.address);
-      // High coverage = 100%, loss = 50 MEVI
-      const payout = ethers.parseEther("50");
+      // High coverage = 100%, loss = 50 MEVI + gas refund (0.01 MEVI)
+      const payout = ethers.parseEther("50") + ethers.parseEther("0.01");
       expect(balanceAfter - balanceBefore).to.equal(payout);
     });
 
@@ -757,8 +757,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       await insurance.resolveCAPTCHA(claimId, true);
       const balanceAfter = await token.balanceOf(user1.address);
 
-      // loss = 50 MEVI, Low = 50% (PDF Table 2)
-      const expectedPayout = ethers.parseEther("25"); // 50 * 0.5
+      // loss = 50 MEVI, Low = 50% (PDF Table 2) + gas refund 0.01 MEVI
+      const expectedPayout = ethers.parseEther("25") + ethers.parseEther("0.01");
       expect(balanceAfter - balanceBefore).to.equal(expectedPayout);
     });
 
@@ -775,8 +775,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       await insurance.resolveCAPTCHA(claimId, true);
       const balanceAfter = await token.balanceOf(user1.address);
 
-      // loss = 50 MEVI, Medium = 70% (PDF Table 2)
-      const expectedPayout = ethers.parseEther("35"); // 50 * 0.7
+      // loss = 50 MEVI, Medium = 70% (PDF Table 2) + gas refund 0.01 MEVI
+      const expectedPayout = ethers.parseEther("35") + ethers.parseEther("0.01");
       expect(balanceAfter - balanceBefore).to.equal(expectedPayout);
     });
 
@@ -793,7 +793,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       await insurance.resolveCAPTCHA(claimId, true);
       const balanceAfter = await token.balanceOf(user1.address);
 
-      const expectedPayout = ethers.parseEther("50"); // 50 * 1.0
+      // loss = 50 MEVI, High = 100% + gas refund 0.01 MEVI
+      const expectedPayout = ethers.parseEther("50") + ethers.parseEther("0.01");
       expect(balanceAfter - balanceBefore).to.equal(expectedPayout);
     });
   });
@@ -831,6 +832,112 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       expect(await insurance.getClaimsCount()).to.equal(0);
       await submitClaimAndGetOracles(user1);
       expect(await insurance.getClaimsCount()).to.equal(1);
+    });
+  });
+
+  // =============================================================
+  //  Gas Refund (C13)
+  // =============================================================
+  describe("Gas Refund (C13)", function () {
+    it("should record submitGasUsed in claim", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1);
+      await submitClaimAndGetOracles(user1);
+
+      // submitGasUsed should be > 0 (gas was measured during submitClaim)
+      const claim = await insurance.claimsArray(0);
+      expect(claim.submitGasUsed).to.be.gt(0);
+    });
+
+    it("should include gas refund in finalizeClaim payout (Gold auto-approve)", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+      // Upgrade to Gold for auto-approve
+      await insurance.setUserTier(user1.address, 3); // Gold
+      const { claimId, oracles } = await submitClaimAndGetOracles(user1);
+
+      const scores = [20, 20, 20, 20, 20, 20, 20];
+      const patterns = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, oracles, scores, patterns);
+
+      const balanceBefore = await token.balanceOf(user1.address);
+      await insurance.finalizeClaim(claimId);
+      const balanceAfter = await token.balanceOf(user1.address);
+
+      // loss = 50 MEVI, High = 100% + gas refund 0.01 MEVI
+      const expectedPayout = ethers.parseEther("50") + ethers.parseEther("0.01");
+      expect(balanceAfter - balanceBefore).to.equal(expectedPayout);
+    });
+
+    it("should emit GasRefundIssued on approved claim", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+      await insurance.setUserTier(user1.address, 3); // Gold
+      const { claimId, oracles } = await submitClaimAndGetOracles(user1);
+
+      const scores = [20, 20, 20, 20, 20, 20, 20];
+      const patterns = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, oracles, scores, patterns);
+
+      await expect(insurance.finalizeClaim(claimId))
+        .to.emit(insurance, "GasRefundIssued")
+        .withArgs(claimId, user1.address, ethers.parseEther("0.01"));
+    });
+
+    it("should emit GasRefundIssued on CAPTCHA approval", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+      const { claimId, oracles } = await submitClaimAndGetOracles(user1);
+
+      const scores = [20, 20, 20, 20, 20, 20, 20];
+      const patterns = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, oracles, scores, patterns);
+      await insurance.finalizeClaim(claimId);
+
+      await expect(insurance.resolveCAPTCHA(claimId, true))
+        .to.emit(insurance, "GasRefundIssued")
+        .withArgs(claimId, user1.address, ethers.parseEther("0.01"));
+    });
+
+    it("owner can set gasRefundAmount", async function () {
+      await insurance.setGasRefundAmount(ethers.parseEther("0.05"));
+      expect(await insurance.gasRefundAmount()).to.equal(ethers.parseEther("0.05"));
+    });
+
+    it("should not emit GasRefundIssued if gasRefundAmount is 0", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+      await insurance.setUserTier(user1.address, 3); // Gold
+      await insurance.setGasRefundAmount(0);
+      const { claimId, oracles } = await submitClaimAndGetOracles(user1);
+
+      const scores = [20, 20, 20, 20, 20, 20, 20];
+      const patterns = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, oracles, scores, patterns);
+
+      await expect(insurance.finalizeClaim(claimId))
+        .to.not.emit(insurance, "GasRefundIssued");
+    });
+  });
+
+  // =============================================================
+  //  Premium Estimate View Function
+  // =============================================================
+  describe("Premium Estimate", function () {
+    it("should return premium estimate using fallback (no PremiumCalculator)", async function () {
+      // No PremiumCalculator set, uses 1.5% fallback
+      const swapValue = ethers.parseEther("1000");
+      const estimate = await insurance.getPremiumEstimate(swapValue, CoverageLevel.High);
+      // 1000 * 150 / 10000 = 15
+      expect(estimate).to.equal(ethers.parseEther("15"));
+    });
+
+    it("should return premium estimate for different swap values", async function () {
+      const estimate100 = await insurance.getPremiumEstimate(ethers.parseEther("100"), CoverageLevel.High);
+      const estimate500 = await insurance.getPremiumEstimate(ethers.parseEther("500"), CoverageLevel.High);
+      // Both use 1.5% fallback
+      expect(estimate100).to.equal(ethers.parseEther("1.5"));
+      expect(estimate500).to.equal(ethers.parseEther("7.5"));
     });
   });
 

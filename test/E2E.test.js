@@ -279,7 +279,8 @@ describe("End-to-End Integration (Phase 8)", function () {
       expect(victimBalTokenAfter).to.be.gt(victimBalTokenBefore);
 
       const payout = victimBalTokenAfter - victimBalTokenBefore;
-      expect(payout).to.equal(loss); // High = 100%
+      const gasRefund = ethers.parseEther("0.01");
+      expect(payout).to.equal(loss + gasRefund); // High = 100% + gas refund
     });
 
     it("should complete flow with Medium coverage (70% payout)", async function () {
@@ -309,8 +310,9 @@ describe("End-to-End Integration (Phase 8)", function () {
       const finalInfo = await insurance.getClaimInfo(claimId);
       expect(finalInfo.status).to.equal(ClaimStatus.Approved);
 
-      // Medium = 70% payout (PDF Table 2)
-      const expectedPayout = (loss * 70n) / 100n;
+      // Medium = 70% payout (PDF Table 2) + gas refund
+      const gasRefund = ethers.parseEther("0.01");
+      const expectedPayout = (loss * 70n) / 100n + gasRefund;
       expect(balAfter - balBefore).to.equal(expectedPayout);
     });
   });

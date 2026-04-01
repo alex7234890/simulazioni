@@ -127,6 +127,13 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     uint256 public inactivityPenalty = 0.001 ether;
 
     // -------------------------------------------------------
+    //  Gas Refund (C13)
+    // -------------------------------------------------------
+
+    /// @dev Configurable gas refund amount for approved claims (in MEVI tokens)
+    uint256 public gasRefundAmount = 0.01 ether;
+
+    // -------------------------------------------------------
     //  Events
     // -------------------------------------------------------
 
@@ -165,6 +172,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     event SecondaryReviewTriggered(uint256 indexed claimId, uint256 dispersione, address[] newOracles);
     event BotBlacklisted(address indexed botAddress, uint256 attackCount, uint256 totalDamage);
     event OracleInactivityPenalized(uint256 indexed claimId, address indexed oracle, uint256 penalty);
+    event GasRefundIssued(uint256 indexed claimId, address indexed user, uint256 refundAmount);
     event SwapInsured(
         uint256 indexed swapId,
         address indexed user,
@@ -332,6 +340,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         uint256 _loss,
         address _botAddress
     ) external nonReentrant {
+        uint256 gasStart = gasleft();
         require(_swapId < insuredSwaps.length, "Invalid swap ID");
         DataTypes.InsuredSwap storage insSwap = insuredSwaps[_swapId];
         require(insSwap.user == msg.sender, "Not swap owner");
@@ -375,6 +384,9 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
 
         userClaimIds[msg.sender].push(claimId);
         profile.totalClaims++;
+
+        // Record gas used for potential refund on approval (C13)
+        newClaim.submitGasUsed = gasStart - gasleft();
 
         emit ClaimSubmitted(
             claimId, msg.sender,
@@ -562,19 +574,25 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         claim.status = finalStatus;
         _updateUserFraudScore(claim.user, median);
 
-        // Step 5: If approved, calculate and issue payout
+        // Step 5: If approved, calculate and issue payout + gas refund (C13)
         if (finalStatus == DataTypes.ClaimStatus.Approved) {
             userProfiles[claim.user].approvedClaims++;
             uint256 coverPercent = coveragePercentBps[claim.coverageLevel];
             uint256 payout = (claim.loss * coverPercent) / 10000;
 
-            // Interaction: transfer payout
+            // Add gas refund to payout (C13)
+            uint256 totalPayout = payout + gasRefundAmount;
+
+            // Interaction: transfer payout + gas refund
             require(
-                token.transfer(claim.user, payout),
+                token.transfer(claim.user, totalPayout),
                 "Payout transfer failed"
             );
 
             emit PayoutIssued(_claimId, claim.user, payout);
+            if (gasRefundAmount > 0) {
+                emit GasRefundIssued(_claimId, claim.user, gasRefundAmount);
+            }
         } else if (finalStatus == DataTypes.ClaimStatus.Rejected) {
             userProfiles[claim.user].rejectedClaims++;
         }
@@ -645,12 +663,18 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             uint256 coverPercent = coveragePercentBps[claim.coverageLevel];
             uint256 payout = (claim.loss * coverPercent) / 10000;
 
+            // Add gas refund to payout (C13)
+            uint256 totalPayout = payout + gasRefundAmount;
+
             require(
-                token.transfer(claim.user, payout),
+                token.transfer(claim.user, totalPayout),
                 "Payout transfer failed"
             );
 
             emit PayoutIssued(_claimId, claim.user, payout);
+            if (gasRefundAmount > 0) {
+                emit GasRefundIssued(_claimId, claim.user, gasRefundAmount);
+            }
             emit ClaimFinalized(_claimId, DataTypes.ClaimStatus.Approved, claim.finalFraudScore, claim.dispersione);
         } else {
             claim.status = DataTypes.ClaimStatus.Rejected;
@@ -694,6 +718,26 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         require(_claimId < claimsArray.length, "Invalid claim ID");
         DataTypes.Claim storage c = claimsArray[_claimId];
         return (c.user, c.status, c.finalFraudScore, c.swapValue, c.loss, c.dispersione, c.revealCount, c.commitCount);
+    }
+
+    /**
+     * @dev Estimate the premium for a given swap value and coverage level.
+     *      Allows users to preview the cost before calling insuredSwap().
+     * @param _swapValue Value of the swap to insure
+     * @param _coverageLevel Coverage level of the user's policy
+     * @return premium Estimated premium in MEVI tokens
+     */
+    function getPremiumEstimate(uint256 _swapValue, DataTypes.CoverageLevel _coverageLevel)
+        external
+        view
+        returns (uint256 premium)
+    {
+        if (address(premiumCalculator) != address(0)) {
+            premium = premiumCalculator.calculatePremium(_swapValue, _coverageLevel);
+            if (premium == 0) premium = (_swapValue * 150) / 10000;
+        } else {
+            premium = (_swapValue * 150) / 10000;
+        }
     }
 
     function getInsuredSwapsCount() external view returns (uint256) {
@@ -791,6 +835,11 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     function setInactivityPenalty(uint256 _val) external onlyOwner {
         inactivityPenalty = _val;
         emit ParameterUpdated("inactivityPenalty", _val);
+    }
+
+    function setGasRefundAmount(uint256 _val) external onlyOwner {
+        gasRefundAmount = _val;
+        emit ParameterUpdated("gasRefundAmount", _val);
     }
 
     function setUserTier(address _user, DataTypes.Tier _tier) external onlyOwner {
