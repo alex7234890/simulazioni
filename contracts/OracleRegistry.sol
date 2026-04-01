@@ -49,6 +49,9 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     /// @dev Watchlist reward penalty in basis points (e.g., 5000 = 50%)
     uint256 public watchlistPenaltyBps = 5000;
 
+    /// @dev Minimum observation period on watchlist before exit (C11)
+    uint256 public tWatchlist = 90 days;
+
     // -------------------------------------------------------
     //  State
     // -------------------------------------------------------
@@ -259,6 +262,14 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             block.timestamp >= info.lastResetTime + tReset,
             "Reset period not elapsed"
         );
+
+        // C11: Watchlisted oracles must observe tWatchlist minimum before exit
+        if (info.status == DataTypes.OracleStatus.Watchlisted) {
+            require(
+                block.timestamp >= info.watchlistPosition + tWatchlist,
+                "Watchlist observation period not elapsed"
+            );
+        }
 
         info.deviationScore = 0;
         info.watchlistStrikes = 0;
@@ -528,6 +539,11 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     function setDeltaWatchlist(uint256 _val) external onlyOwner {
         deltaWatchlist = _val;
         emit ParameterUpdated("deltaWatchlist", _val);
+    }
+
+    function setTWatchlist(uint256 _val) external onlyOwner {
+        tWatchlist = _val;
+        emit ParameterUpdated("tWatchlist", _val);
     }
 
     function setRClaim(uint256 _val) external onlyOwner {

@@ -199,6 +199,14 @@ logs/
   - finalizeClaim() now triggers secondary review when dispersione > threshold (20) on first evaluation
   - Claim is reset with fresh oracles for a second round of commit-reveal
   - Added `secondaryReview` flag to Claim struct, `SecondaryReviewTriggered` event
+- **Correction 11: Twatchlist = 90 days minimum observation**
+  - Watchlisted oracles must stay on watchlist for tWatchlist (90 days) before resetDeviationScore can restore them
+  - Active (non-watchlisted) oracles only need tReset (30 days) for score reset
+  - Added tWatchlist parameter + setTWatchlist() setter
+- **Correction 12: Dataset commitment in PattUpdater** — already implemented in merged branch
+  - commitPattEstimate uses keccak256(pattEstimate, datasetHash, salt)
+  - revealPattEstimate accepts datasetHash, stores in datasetHashes mapping
+- Total: 381/381 tests passing
 - **Correction 9: MEV Bot Blacklist**
   - submitClaim() now accepts botAddress parameter
   - Tracks per-bot attackCount and totalDamage on approved claims
@@ -247,8 +255,8 @@ ALL 9 PHASES COMPLETE.
 8. ~~Correzione 8: Score scostamento come somma cumulativa~~ DONE
 9. ~~Correzione 9: Blacklist bot MEV~~ DONE
 10. ~~Correzione 10: Penalità inattività oracle~~ DONE
-11. Correzione 11: Twatchlist periodo minimo osservazione
-12. Correzione 12: Dataset commitment nel PattUpdater
+11. ~~Correzione 11: Twatchlist periodo minimo osservazione~~ DONE
+12. ~~Correzione 12: Dataset commitment nel PattUpdater~~ DONE (merged branch)
 13. Correzione 13: Rimborso gas per claim approvati
 
 ## How to Run

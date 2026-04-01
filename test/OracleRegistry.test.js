@@ -16,6 +16,7 @@ describe("OracleRegistry", function () {
   const T_ACTIVATION = 7 * 24 * 60 * 60; // 7 days
   const T_COOLDOWN = 30 * 24 * 60 * 60;  // 30 days
   const T_RESET = 30 * 24 * 60 * 60;     // 30 days
+  const T_WATCHLIST = 90 * 24 * 60 * 60; // 90 days (C11)
 
   beforeEach(async function () {
     [owner, oracle1, oracle2, oracle3, oracle4, oracle5, oracle6, oracle7, oracle8] =
@@ -254,8 +255,17 @@ describe("OracleRegistry", function () {
       ).to.be.revertedWith("Reset period not elapsed");
     });
 
-    it("should reset deviation score and strikes after Treset", async function () {
+    it("should revert reset before tWatchlist observation period (C11)", async function () {
+      // T_RESET (30 days) passed but tWatchlist (90 days) not
       await time.increase(T_RESET);
+      await expect(
+        registry.resetDeviationScore(oracle1.address)
+      ).to.be.revertedWith("Watchlist observation period not elapsed");
+    });
+
+    it("should reset deviation score and strikes after tWatchlist", async function () {
+      // Need tWatchlist (90 days) for watchlisted oracles
+      await time.increase(T_WATCHLIST);
       await registry.resetDeviationScore(oracle1.address);
 
       const [, status, , , deviationScore, , watchlistStrikes] = await registry.getOracleInfo(oracle1.address);
@@ -265,10 +275,27 @@ describe("OracleRegistry", function () {
     });
 
     it("should emit OracleScoreReset event", async function () {
-      await time.increase(T_RESET);
+      await time.increase(T_WATCHLIST);
       await expect(registry.resetDeviationScore(oracle1.address))
         .to.emit(registry, "OracleScoreReset")
         .withArgs(oracle1.address);
+    });
+
+    it("active (non-watchlisted) oracle should reset after Treset only", async function () {
+      // Register oracle2 and give it a deviation (but not enough to watchlist)
+      await registry.connect(oracle2).registerOracle({ value: BASE_STAKE });
+      await time.increase(T_ACTIVATION);
+      await registry.connect(oracle2).activateOracle();
+      await registry.recordDeviation(oracle2.address, 5); // below deltaWatchlist, no strike
+
+      const [, status] = await registry.getOracleInfo(oracle2.address);
+      expect(status).to.equal(OracleStatus.Active);
+
+      await time.increase(T_RESET);
+      await registry.resetDeviationScore(oracle2.address);
+
+      const [, , , , deviationScore] = await registry.getOracleInfo(oracle2.address);
+      expect(deviationScore).to.equal(0);
     });
   });
 
