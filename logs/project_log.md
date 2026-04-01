@@ -206,7 +206,6 @@ logs/
 - **Correction 12: Dataset commitment in PattUpdater** — already implemented in merged branch
   - commitPattEstimate uses keccak256(pattEstimate, datasetHash, salt)
   - revealPattEstimate accepts datasetHash, stores in datasetHashes mapping
-- Total: 381/381 tests passing
 - **Correction 9: MEV Bot Blacklist**
   - submitClaim() now accepts botAddress parameter
   - Tracks per-bot attackCount and totalDamage on approved claims
@@ -219,7 +218,6 @@ logs/
   - Configurable inactivityPenalty (default 0.001 ETH)
   - Added OracleInactivityPenalized event
   - Added setUserTier() owner function for testing tier-dependent logic
-- Total: 379/379 tests passing
 - **Correction 8: Cumulative deviation score + watchlistStrikes**
   - recordDeviation() now accepts `uint256 _absoluteDeviation` parameter
   - deviationScore accumulates sum of absolute deviations (not just a counter)
@@ -228,6 +226,16 @@ logs/
   - resetDeviationScore() now also resets watchlistStrikes
   - Updated getOracleInfo() to return watchlistStrikes
 - Total: 375/375 tests passing
+- **Correction 13: Gas refund for approved claims + getPremiumEstimate**
+  - submitClaim() now measures gas used (submitGasUsed field in Claim struct)
+  - Configurable gasRefundAmount (default 0.01 MEVI) added to payout on claim approval
+  - Gas refund applied in both finalizeClaim() and resolveCAPTCHA()
+  - Added GasRefundIssued event, setGasRefundAmount() owner setter
+  - Added getPremiumEstimate(swapValue, coverageLevel) view function for premium preview before insuredSwap()
+  - 8 new tests (gas refund + premium estimate)
+- Total: 389/389 tests passing
+
+ALL 13 CORRECTIONS COMPLETE.
 
 ## Next Tasks (Phases)
 
@@ -257,7 +265,7 @@ ALL 9 PHASES COMPLETE.
 10. ~~Correzione 10: Penalità inattività oracle~~ DONE
 11. ~~Correzione 11: Twatchlist periodo minimo osservazione~~ DONE
 12. ~~Correzione 12: Dataset commitment nel PattUpdater~~ DONE (merged branch)
-13. Correzione 13: Rimborso gas per claim approvati
+13. ~~Correzione 13: Rimborso gas per claim approvati~~ DONE
 
 ## How to Run
 
