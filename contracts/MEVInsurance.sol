@@ -140,9 +140,9 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         token = IERC20(_token);
         oracleRegistry = OracleRegistry(payable(_oracleRegistry));
 
-        // Coverage percentages (basis points)
-        coveragePercentBps[DataTypes.CoverageLevel.Low] = 7000;    // 70%
-        coveragePercentBps[DataTypes.CoverageLevel.Medium] = 9000; // 90%
+        // Coverage payout percentages (basis points) - PDF Table 2
+        coveragePercentBps[DataTypes.CoverageLevel.Low] = 5000;    // 50%
+        coveragePercentBps[DataTypes.CoverageLevel.Medium] = 7000; // 70%
         coveragePercentBps[DataTypes.CoverageLevel.High] = 10000;  // 100%
 
         // Max daily swaps per tier

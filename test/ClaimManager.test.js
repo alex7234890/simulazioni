@@ -698,7 +698,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       await setupOracles();
     });
 
-    it("Low coverage: payout = loss * 70%", async function () {
+    it("Low coverage: payout = loss * 50%", async function () {
       await setupUserWithPolicy(user1, CoverageLevel.Low);
       const { claimId, oracles } = await submitClaimAndGetOracles(user1);
 
@@ -712,12 +712,12 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       await insurance.resolveCAPTCHA(claimId, true);
       const balanceAfter = await token.balanceOf(user1.address);
 
-      // loss = 50 MEVI, Low = 70%
-      const expectedPayout = ethers.parseEther("35"); // 50 * 0.7
+      // loss = 50 MEVI, Low = 50% (PDF Table 2)
+      const expectedPayout = ethers.parseEther("25"); // 50 * 0.5
       expect(balanceAfter - balanceBefore).to.equal(expectedPayout);
     });
 
-    it("Medium coverage: payout = loss * 90%", async function () {
+    it("Medium coverage: payout = loss * 70%", async function () {
       await setupUserWithPolicy(user1, CoverageLevel.Medium);
       const { claimId, oracles } = await submitClaimAndGetOracles(user1);
 
@@ -730,7 +730,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       await insurance.resolveCAPTCHA(claimId, true);
       const balanceAfter = await token.balanceOf(user1.address);
 
-      const expectedPayout = ethers.parseEther("45"); // 50 * 0.9
+      // loss = 50 MEVI, Medium = 70% (PDF Table 2)
+      const expectedPayout = ethers.parseEther("35"); // 50 * 0.7
       expect(balanceAfter - balanceBefore).to.equal(expectedPayout);
     });
 

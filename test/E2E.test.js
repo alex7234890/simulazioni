@@ -283,7 +283,7 @@ describe("End-to-End Integration (Phase 8)", function () {
       expect(payout).to.equal(loss); // High = 100%
     });
 
-    it("should complete flow with Medium coverage (90% payout)", async function () {
+    it("should complete flow with Medium coverage (70% payout)", async function () {
       // Register + buy policy with Medium coverage
       await insurance.connect(victim).registerUser();
       const premium = await getActualPremium(CoverageLevel.Medium);
@@ -311,8 +311,8 @@ describe("End-to-End Integration (Phase 8)", function () {
       const finalInfo = await insurance.getClaimInfo(claimId);
       expect(finalInfo.status).to.equal(ClaimStatus.Approved);
 
-      // Medium = 90% payout
-      const expectedPayout = (loss * 90n) / 100n;
+      // Medium = 70% payout (PDF Table 2)
+      const expectedPayout = (loss * 70n) / 100n;
       expect(balAfter - balBefore).to.equal(expectedPayout);
     });
   });
