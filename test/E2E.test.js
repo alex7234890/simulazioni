@@ -581,8 +581,8 @@ describe("End-to-End Integration (Phase 8)", function () {
       const loss = e(300);
       const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), loss);
 
-      // Oracles vote high fraud score (> thetaReject = 70)
-      const fraudScores = [85, 90, 80, 88, 92, 75, 82];
+      // Oracles vote high fraud score (>= thetaReject = 80)
+      const fraudScores = [90, 95, 85, 92, 100, 88, 86];
       const patternValids = [true, true, true, true, true, true, true];
       await oraclesCommitAndReveal(claimId, assignedOracles, fraudScores, patternValids);
 
@@ -623,9 +623,9 @@ describe("End-to-End Integration (Phase 8)", function () {
       const loss = e(100);
       const { claimId, assignedOracles } = await submitClaimForUser(user1, e(500), loss);
 
-      // Medium fraud scores (between thetaApprove=30 and thetaReject=70)
-      // For Bronze tier: scores 30-70 → CAPTCHARequired
-      const fraudScores = [45, 50, 48, 52, 47, 55, 43];
+      // Medium fraud scores (between thetaApprove=60 and thetaReject=80)
+      // For Bronze tier: all scores < thetaReject → CAPTCHARequired
+      const fraudScores = [65, 70, 68, 72, 67, 75, 63];
       const patternValids = [true, true, true, true, true, true, true];
       await oraclesCommitAndReveal(claimId, assignedOracles, fraudScores, patternValids);
 
@@ -700,10 +700,10 @@ describe("End-to-End Integration (Phase 8)", function () {
         [true, true, true, true, true, true, true]
       );
 
-      // Process claim 2 - reject (high fraud)
+      // Process claim 2 - reject (high fraud >= thetaReject=80)
       await oraclesCommitAndReveal(
         claim2.claimId, claim2.assignedOracles,
-        [80, 85, 78, 90, 82, 88, 76],
+        [90, 95, 88, 100, 92, 98, 86],
         [true, true, true, true, true, true, true]
       );
 

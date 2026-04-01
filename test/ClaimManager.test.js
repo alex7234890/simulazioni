@@ -414,16 +414,24 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       ).to.be.revertedWith("Already revealed");
     });
 
-    it("should revert for fraud score > 100", async function () {
+    it("should revert for fraud score > 130", async function () {
       const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
-      // fraudScore = 101, we can't really compute hash with uint8 > 255
-      // but 101 fits in uint8, so test the require
-      const hash = computeCommitHash(101, true, salt);
+      const hash = computeCommitHash(131, true, salt);
       const signer = await findSigner(assignedOracles[0]);
       await insurance.connect(signer).commitVerdict(claimId, hash);
       await expect(
-        insurance.connect(signer).revealVerdict(claimId, 101, true, salt)
-      ).to.be.revertedWith("Fraud score must be 0-100");
+        insurance.connect(signer).revealVerdict(claimId, 131, true, salt)
+      ).to.be.revertedWith("Fraud score must be 0-130");
+    });
+
+    it("should accept fraud score of 130", async function () {
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt"));
+      const hash = computeCommitHash(130, true, salt);
+      const signer = await findSigner(assignedOracles[0]);
+      await insurance.connect(signer).commitVerdict(claimId, hash);
+      await expect(
+        insurance.connect(signer).revealVerdict(claimId, 130, true, salt)
+      ).to.not.be.reverted;
     });
 
     it("should track pattern valid/invalid votes", async function () {
@@ -486,8 +494,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
     });
 
     it("Bronze: score < thetaReject -> CAPTCHARequired", async function () {
-      // Fraud scores: all 20 (median = 20, < thetaReject=70)
-      const scores = [20, 20, 20, 20, 20, 20, 20];
+      // Fraud scores: all 40 (median = 40, < thetaReject=80)
+      const scores = [40, 40, 40, 40, 40, 40, 40];
       const patterns = [true, true, true, true, true, true, true];
 
       await oraclesCommitAndReveal(claimId, assignedOracles, scores, patterns);
@@ -495,12 +503,12 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
 
       const info = await insurance.getClaimInfo(claimId);
       expect(info.status).to.equal(ClaimStatus.CAPTCHARequired);
-      expect(info.finalFraudScore).to.equal(20);
+      expect(info.finalFraudScore).to.equal(40);
     });
 
     it("Bronze: score >= thetaReject -> Rejected + blacklisted", async function () {
-      // Fraud scores: all 80 (median = 80, >= thetaReject=70)
-      const scores = [80, 80, 80, 80, 80, 80, 80];
+      // Fraud scores: all 90 (median = 90, >= thetaReject=80)
+      const scores = [90, 90, 90, 90, 90, 90, 90];
       const patterns = [true, true, true, true, true, true, true];
 
       await oraclesCommitAndReveal(claimId, assignedOracles, scores, patterns);

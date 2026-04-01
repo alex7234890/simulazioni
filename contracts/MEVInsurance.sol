@@ -61,10 +61,10 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     uint256 public dispersioneThreshold = 20;
 
     /// @dev Fraud score threshold for rejection (basis points of 100-scale)
-    uint256 public thetaReject = 70;
+    uint256 public thetaReject = 80;
 
     /// @dev Fraud score threshold for approval (Gold/Platinum only)
-    uint256 public thetaApprove = 30;
+    uint256 public thetaApprove = 60;
 
     /// @dev Coverage percentage per level in basis points
     mapping(DataTypes.CoverageLevel => uint256) public coveragePercentBps;
@@ -333,7 +333,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         require(claim.status == DataTypes.ClaimStatus.OracleReview, "Claim not in review");
         require(_isAssignedOracle(_claimId, msg.sender), "Not assigned oracle");
         require(!hasRevealed[_claimId][msg.sender], "Already revealed");
-        require(_fraudScore <= 100, "Fraud score must be 0-100");
+        require(_fraudScore <= 130, "Fraud score must be 0-130");
 
         // Verify commit hash
         bytes32 expectedHash = keccak256(abi.encodePacked(_fraudScore, _patternValid, _salt));
