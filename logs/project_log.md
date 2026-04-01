@@ -199,6 +199,19 @@ logs/
   - finalizeClaim() now triggers secondary review when dispersione > threshold (20) on first evaluation
   - Claim is reset with fresh oracles for a second round of commit-reveal
   - Added `secondaryReview` flag to Claim struct, `SecondaryReviewTriggered` event
+- **Correction 9: MEV Bot Blacklist**
+  - submitClaim() now accepts botAddress parameter
+  - Tracks per-bot attackCount and totalDamage on approved claims
+  - Auto-blacklists bot when attackCount >= botBlacklistThreshold (default 3)
+  - Added botAttackCount, botTotalDamage, botBlacklisted mappings
+  - Added BotBlacklisted event
+- **Correction 10: Oracle Inactivity Penalty**
+  - finalizeClaim() now penalizes oracles that didn't reveal (after timeout)
+  - New penalizeInactivity() in OracleRegistry: deducts stake without changing status
+  - Configurable inactivityPenalty (default 0.001 ETH)
+  - Added OracleInactivityPenalized event
+  - Added setUserTier() owner function for testing tier-dependent logic
+- Total: 379/379 tests passing
 - **Correction 8: Cumulative deviation score + watchlistStrikes**
   - recordDeviation() now accepts `uint256 _absoluteDeviation` parameter
   - deviationScore accumulates sum of absolute deviations (not just a counter)
@@ -232,8 +245,8 @@ ALL 9 PHASES COMPLETE.
 6. ~~Correzione 6: Margine ms variabile nel PattUpdater~~ DONE
 7. ~~Correzione 7: Revisione secondaria per alta dispersione~~ DONE
 8. ~~Correzione 8: Score scostamento come somma cumulativa~~ DONE
-9. Correzione 9: Blacklist bot MEV
-10. Correzione 10: Penalità inattività oracle
+9. ~~Correzione 9: Blacklist bot MEV~~ DONE
+10. ~~Correzione 10: Penalità inattività oracle~~ DONE
 11. Correzione 11: Twatchlist periodo minimo osservazione
 12. Correzione 12: Dataset commitment nel PattUpdater
 13. Correzione 13: Rimborso gas per claim approvati

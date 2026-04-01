@@ -104,6 +104,29 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     mapping(address => uint256[]) public userInsuredSwapIds;
 
     // -------------------------------------------------------
+    //  Bot Blacklist (C9)
+    // -------------------------------------------------------
+
+    /// @dev Number of approved claims attributed to a bot address
+    mapping(address => uint256) public botAttackCount;
+
+    /// @dev Total damage (loss) attributed to a bot address
+    mapping(address => uint256) public botTotalDamage;
+
+    /// @dev Whether a bot address is blacklisted
+    mapping(address => bool) public botBlacklisted;
+
+    /// @dev Threshold: number of approved claims before bot is blacklisted
+    uint256 public botBlacklistThreshold = 3;
+
+    // -------------------------------------------------------
+    //  Inactivity Penalty (C10)
+    // -------------------------------------------------------
+
+    /// @dev Penalty deducted from non-revealing oracle stake (in wei)
+    uint256 public inactivityPenalty = 0.001 ether;
+
+    // -------------------------------------------------------
     //  Events
     // -------------------------------------------------------
 
@@ -140,6 +163,8 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     );
     event PayoutIssued(uint256 indexed claimId, address indexed user, uint256 amount);
     event SecondaryReviewTriggered(uint256 indexed claimId, uint256 dispersione, address[] newOracles);
+    event BotBlacklisted(address indexed botAddress, uint256 attackCount, uint256 totalDamage);
+    event OracleInactivityPenalized(uint256 indexed claimId, address indexed oracle, uint256 penalty);
     event SwapInsured(
         uint256 indexed swapId,
         address indexed user,
@@ -297,13 +322,15 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
      * @param _txHash2 Victim transaction hash
      * @param _txHash3 Backrun transaction hash
      * @param _loss Claimed loss amount
+     * @param _botAddress Address of the suspected MEV bot (C9)
      */
     function submitClaim(
         uint256 _swapId,
         bytes32 _txHash1,
         bytes32 _txHash2,
         bytes32 _txHash3,
-        uint256 _loss
+        uint256 _loss,
+        address _botAddress
     ) external nonReentrant {
         require(_swapId < insuredSwaps.length, "Invalid swap ID");
         DataTypes.InsuredSwap storage insSwap = insuredSwaps[_swapId];
@@ -339,6 +366,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         newClaim.coverageLevel = policy.coverageLevel;
         newClaim.swapValue = insSwap.swapValue;
         newClaim.loss = _loss;
+        newClaim.botAddress = _botAddress;
         newClaim.timestamp = block.timestamp;
 
         for (uint256 i = 0; i < selectedOracles.length; i++) {
@@ -551,10 +579,21 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             userProfiles[claim.user].rejectedClaims++;
         }
 
+        // Step 6: Track bot stats if approved (C9)
+        if (finalStatus == DataTypes.ClaimStatus.Approved && claim.botAddress != address(0)) {
+            botAttackCount[claim.botAddress]++;
+            botTotalDamage[claim.botAddress] += claim.loss;
+            if (!botBlacklisted[claim.botAddress] && botAttackCount[claim.botAddress] >= botBlacklistThreshold) {
+                botBlacklisted[claim.botAddress] = true;
+                emit BotBlacklisted(claim.botAddress, botAttackCount[claim.botAddress], botTotalDamage[claim.botAddress]);
+            }
+        }
+
         emit ClaimFinalized(_claimId, finalStatus, median, claim.dispersione);
 
-        // Reward all oracles that revealed (independent of claim outcome)
+        // Reward revealed oracles + penalize inactive ones (C10)
         _rewardRevealedOracles(_claimId);
+        _penalizeInactiveOracles(_claimId);
     }
 
     /**
@@ -568,6 +607,22 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             if (hasRevealed[_claimId][oracle]) {
                 // Try to reward; skip silently if registry lacks funds or oracle ineligible
                 try oracleRegistry.rewardOracle(oracle) {} catch {}
+            }
+        }
+    }
+
+    /**
+     * @dev Penalize oracles that were assigned but did not reveal (C10).
+     * Small stake deduction via OracleRegistry.slashOracle.
+     */
+    function _penalizeInactiveOracles(uint256 _claimId) internal {
+        DataTypes.Claim storage claim = claimsArray[_claimId];
+        for (uint256 i = 0; i < claim.assignedOracles.length; i++) {
+            address oracle = claim.assignedOracles[i];
+            if (!hasRevealed[_claimId][oracle]) {
+                try oracleRegistry.penalizeInactivity(oracle, inactivityPenalty) {
+                    emit OracleInactivityPenalized(_claimId, oracle, inactivityPenalty);
+                } catch {}
             }
         }
     }
@@ -726,6 +781,20 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     function setDispersioneThreshold(uint256 _val) external onlyOwner {
         dispersioneThreshold = _val;
         emit ParameterUpdated("dispersioneThreshold", _val);
+    }
+
+    function setBotBlacklistThreshold(uint256 _val) external onlyOwner {
+        botBlacklistThreshold = _val;
+        emit ParameterUpdated("botBlacklistThreshold", _val);
+    }
+
+    function setInactivityPenalty(uint256 _val) external onlyOwner {
+        inactivityPenalty = _val;
+        emit ParameterUpdated("inactivityPenalty", _val);
+    }
+
+    function setUserTier(address _user, DataTypes.Tier _tier) external onlyOwner {
+        userProfiles[_user].tier = _tier;
     }
 
     // -------------------------------------------------------

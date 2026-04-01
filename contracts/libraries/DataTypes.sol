@@ -120,6 +120,7 @@ library DataTypes {
         uint256 revealCount;        // Number of oracles that have revealed
         uint256 commitCount;        // Number of oracles that have committed
         bool secondaryReview;       // Whether this claim has been through secondary review
+        address botAddress;         // MEV bot address (C9)
     }
 
     /// @dev Insurance policy parameters

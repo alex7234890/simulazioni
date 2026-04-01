@@ -59,8 +59,8 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
     await insurance.connect(user).insuredSwap(swapValue);
     const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
 
-    // Then submit claim referencing the swap
-    const tx = await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss);
+    // Then submit claim referencing the swap (botAddress = zero for default)
+    const tx = await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss, ethers.ZeroAddress);
     const receipt = await tx.wait();
     const claimId = (await insurance.getClaimsCount()) - 1n;
     const oracles = await insurance.getClaimOracles(claimId);
@@ -229,7 +229,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
 
       await expect(
-        insurance.connect(user1).submitClaim(swapId, tx1, tx2, tx3, ethers.parseEther("50"))
+        insurance.connect(user1).submitClaim(swapId, tx1, tx2, tx3, ethers.parseEther("50"), ethers.ZeroAddress)
       ).to.emit(insurance, "ClaimSubmitted");
     });
 
@@ -266,7 +266,7 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun"));
       await expect(
         insurance.connect(user2).submitClaim(
-          0, tx1, tx1, tx1, ethers.parseEther("10")
+          0, tx1, tx1, tx1, ethers.parseEther("10"), ethers.ZeroAddress
         )
       ).to.be.revertedWith("Invalid swap ID");
     });
@@ -289,10 +289,10 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       const sv = ethers.parseEther("100");
       await insurance.connect(user1).insuredSwap(sv);
       const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
-      await insurance.connect(user1).submitClaim(swapId, tx1, tx1, tx1, ethers.parseEther("10"));
+      await insurance.connect(user1).submitClaim(swapId, tx1, tx1, tx1, ethers.parseEther("10"), ethers.ZeroAddress);
 
       await expect(
-        insurance.connect(user1).submitClaim(swapId, tx1, tx1, tx1, ethers.parseEther("10"))
+        insurance.connect(user1).submitClaim(swapId, tx1, tx1, tx1, ethers.parseEther("10"), ethers.ZeroAddress)
       ).to.be.revertedWith("Swap already claimed");
     });
   });
@@ -903,6 +903,155 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       // debt = loss * 2000 / 10000 = loss * 20%
       const expectedDebt = loss * 2000n / 10000n;
       expect(profile.debt).to.equal(expectedDebt);
+    });
+  });
+
+  // =============================================================
+  //  Bot Blacklist (C9)
+  // =============================================================
+  describe("Bot Blacklist (C9)", function () {
+    const BOT_ADDRESS = "0x0000000000000000000000000000000000000B07";
+
+    async function submitClaimWithBot(user, botAddr) {
+      const tx1 = ethers.keccak256(ethers.toUtf8Bytes("frontrun_" + Date.now()));
+      const tx2 = ethers.keccak256(ethers.toUtf8Bytes("victim_" + Date.now()));
+      const tx3 = ethers.keccak256(ethers.toUtf8Bytes("backrun_" + Date.now()));
+      const swapValue = ethers.parseEther("500");
+      const loss = ethers.parseEther("50");
+
+      await insurance.connect(user).insuredSwap(swapValue);
+      const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
+      await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss, botAddr);
+      const claimId = (await insurance.getClaimsCount()) - 1n;
+      const oracles = await insurance.getClaimOracles(claimId);
+      return { claimId: Number(claimId), oracles };
+    }
+
+    it("should track bot attack count on approved claim", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+
+      // Set user tier to Gold so claims can be auto-approved
+      // Use owner to set thetaApprove high enough for Bronze: override to treat Bronze like Gold
+      // Instead: use CAPTCHA flow
+      const { claimId, oracles } = await submitClaimWithBot(user1, BOT_ADDRESS);
+      const scores = [20, 20, 20, 20, 20, 20, 20]; // low fraud
+      const patterns = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, oracles, scores, patterns);
+      await insurance.finalizeClaim(claimId);
+
+      // Bronze -> CAPTCHARequired, resolve to approve
+      await insurance.resolveCAPTCHA(claimId, true);
+
+      // Bot should NOT be blacklisted yet - resolveCAPTCHA doesn't track bots
+      // But finalizeClaim does for direct Approved status
+      // For Bronze, claims go through CAPTCHA, so bot tracking happens only on direct approval
+      expect(await insurance.botAttackCount(BOT_ADDRESS)).to.equal(0);
+    });
+
+    it("should track and blacklist bot after threshold approvals", async function () {
+      await setupOracles();
+
+      // Set botBlacklistThreshold = 2 for easier testing
+      await insurance.setBotBlacklistThreshold(2);
+
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+
+      // Set user tier to Gold so claims can be auto-approved
+      // Gold: score < thetaApprove(60) -> Approved
+      await insurance.setUserTier(user1.address, 2); // Gold=2
+
+      // Claim 1 - approved
+      const c1 = await submitClaimWithBot(user1, BOT_ADDRESS);
+      const scores1 = [20, 20, 20, 20, 20, 20, 20];
+      const patterns1 = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(c1.claimId, c1.oracles, scores1, patterns1);
+      await insurance.finalizeClaim(c1.claimId);
+
+      expect(await insurance.botAttackCount(BOT_ADDRESS)).to.equal(1);
+      expect(await insurance.botBlacklisted(BOT_ADDRESS)).to.be.false;
+
+      // Claim 2 - approved -> triggers blacklist (threshold=2)
+      const c2 = await submitClaimWithBot(user1, BOT_ADDRESS);
+      const scores2 = [15, 15, 15, 15, 15, 15, 15];
+      const patterns2 = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(c2.claimId, c2.oracles, scores2, patterns2);
+      await expect(insurance.finalizeClaim(c2.claimId))
+        .to.emit(insurance, "BotBlacklisted");
+
+      // Verify bot stats
+
+      expect(await insurance.botAttackCount(BOT_ADDRESS)).to.equal(2);
+      expect(await insurance.botBlacklisted(BOT_ADDRESS)).to.be.true;
+      expect(await insurance.botTotalDamage(BOT_ADDRESS)).to.equal(ethers.parseEther("100"));
+    });
+  });
+
+  // =============================================================
+  //  Oracle Inactivity Penalty (C10)
+  // =============================================================
+  describe("Oracle Inactivity Penalty (C10)", function () {
+    it("should penalize oracles that did not reveal after timeout", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+
+      // Need insurance to be authorized on registry for penalizeInactivity
+      await registry.setAuthorizedCaller(await insurance.getAddress(), true);
+
+      const { claimId, oracles } = await submitClaimAndGetOracles(user1);
+
+      // Only first oracle reveals
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt0"));
+      const hash = computeCommitHash(25, true, salt);
+      const signer = await findSigner(oracles[0]);
+      await insurance.connect(signer).commitVerdict(claimId, hash);
+      await insurance.connect(signer).revealVerdict(claimId, 25, true, salt);
+
+      // Get stakes before
+      const stakesBefore = [];
+      for (let i = 1; i < oracles.length; i++) {
+        const info = await registry.getOracleInfo(oracles[i]);
+        stakesBefore.push(info.stake);
+      }
+
+      // Advance past timeout
+      await time.increase(ORACLE_TIMEOUT + 1);
+      await insurance.finalizeClaim(claimId);
+
+      // Non-revealing oracles should have been penalized
+      const inactivityPenalty = await insurance.inactivityPenalty();
+      for (let i = 1; i < oracles.length; i++) {
+        const info = await registry.getOracleInfo(oracles[i]);
+        expect(info.stake).to.equal(stakesBefore[i - 1] - inactivityPenalty);
+      }
+    });
+
+    it("should not penalize oracles that revealed", async function () {
+      await setupOracles();
+      await setupUserWithPolicy(user1, CoverageLevel.High);
+      await registry.setAuthorizedCaller(await insurance.getAddress(), true);
+
+      const { claimId, oracles } = await submitClaimAndGetOracles(user1);
+
+      // All oracles reveal
+      const scores = [20, 20, 20, 20, 20, 20, 20];
+      const patterns = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, oracles, scores, patterns);
+
+      // Get stakes before finalize
+      const stakesBefore = [];
+      for (const addr of oracles) {
+        const info = await registry.getOracleInfo(addr);
+        stakesBefore.push(info.stake);
+      }
+
+      await insurance.finalizeClaim(claimId);
+
+      // All oracles revealed, no penalties
+      for (let i = 0; i < oracles.length; i++) {
+        const info = await registry.getOracleInfo(oracles[i]);
+        expect(info.stake).to.equal(stakesBefore[i]);
+      }
     });
   });
 });

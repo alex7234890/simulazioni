@@ -79,6 +79,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     event OracleWatchlisted(address indexed oracle, uint256 deviationScore);
     event OracleDeviationRecorded(address indexed oracle, uint256 newDeviationScore);
     event OracleScoreReset(address indexed oracle);
+    event OracleInactivityPenalized(address indexed oracle, uint256 amount);
     event OracleSlashed(address indexed oracle, uint256 slashAmount);
     event OracleExpelled(address indexed oracle);
     event OracleReintegrated(address indexed oracle, uint256 newStake);
@@ -275,6 +276,28 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     // -------------------------------------------------------
     //  Slashing (called by SlashingSystem)
     // -------------------------------------------------------
+
+    /**
+     * @dev Penalize an oracle for inactivity (not revealing). Deducts a small
+     * amount from stake without changing oracle status (C10).
+     * @param _oracle Oracle to penalize
+     * @param _amount Amount to deduct from stake
+     */
+    function penalizeInactivity(address _oracle, uint256 _amount) external onlyOwnerOrAuthorized nonReentrant {
+        DataTypes.OracleInfo storage info = oracleData[_oracle];
+        require(
+            info.status == DataTypes.OracleStatus.Active ||
+            info.status == DataTypes.OracleStatus.Watchlisted,
+            "Oracle not active"
+        );
+
+        if (_amount > info.stake) {
+            _amount = info.stake; // Cap at available stake
+        }
+        info.stake -= _amount;
+
+        emit OracleInactivityPenalized(_oracle, _amount);
+    }
 
     /**
      * @dev Slash an oracle's stake. Called by owner (SlashingSystem contract).

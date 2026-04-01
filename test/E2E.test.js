@@ -91,7 +91,7 @@ describe("End-to-End Integration (Phase 8)", function () {
     const swapId = (await insurance.getInsuredSwapsCount()) - 1n;
 
     const claimCountBefore = await insurance.getClaimsCount();
-    await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss);
+    await insurance.connect(user).submitClaim(swapId, tx1, tx2, tx3, loss, ethers.ZeroAddress);
     const claimId = claimCountBefore;
     const assignedOracles = await insurance.getClaimOracles(claimId);
     return { claimId: Number(claimId), assignedOracles, tx1, tx2, tx3 };
