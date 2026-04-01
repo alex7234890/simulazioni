@@ -121,6 +121,7 @@ library DataTypes {
         uint256 commitCount;        // Number of oracles that have committed
         bool secondaryReview;       // Whether this claim has been through secondary review
         address botAddress;         // MEV bot address (C9)
+        uint256 submitGasUsed;      // Gas used during submitClaim (C13)
     }
 
     /// @dev Insurance policy parameters
