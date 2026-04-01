@@ -530,23 +530,52 @@ describe("ClaimManager (MEVInsurance Phase 3)", function () {
       expect(profile.debt).to.be.gt(0); // 20% penalty on loss
     });
 
-    it("should calculate dispersione correctly", async function () {
-      // Scores vary: 10, 20, 30, 40, 50, 60, 70 -> dispersione = 60
+    it("should trigger secondary review when dispersione > threshold", async function () {
+      // Scores vary: 10, 20, 30, 40, 50, 60, 70 -> dispersione = 60 > threshold(20)
       const scores = [10, 20, 30, 40, 50, 60, 70];
+      const patterns = [true, true, true, true, true, true, true];
+
+      await oraclesCommitAndReveal(claimId, assignedOracles, scores, patterns);
+
+      // First finalize triggers secondary review
+      await expect(insurance.finalizeClaim(claimId))
+        .to.emit(insurance, "SecondaryReviewTriggered");
+
+      // Claim should be back in OracleReview with new oracles
+      const info = await insurance.getClaimInfo(claimId);
+      expect(info.status).to.equal(ClaimStatus.OracleReview);
+      expect(info.revealCount).to.equal(0);
+
+      // Second round with converging scores (low dispersione)
+      const newOracles = await insurance.getClaimOracles(claimId);
+      const scores2 = [40, 42, 38, 41, 39, 43, 40];
+      const patterns2 = [true, true, true, true, true, true, true];
+      await oraclesCommitAndReveal(claimId, newOracles, scores2, patterns2);
+      await insurance.finalizeClaim(claimId);
+
+      const finalInfo = await insurance.getClaimInfo(claimId);
+      expect(finalInfo.dispersione).to.equal(5); // 43-38
+      expect(finalInfo.finalFraudScore).to.equal(40); // median of sorted [38,39,40,40,41,42,43]
+    });
+
+    it("should calculate dispersione without secondary review if within threshold", async function () {
+      // Scores with dispersione = 10 (<= threshold of 20)
+      const scores = [35, 40, 38, 42, 45, 37, 40];
       const patterns = [true, true, true, true, true, true, true];
 
       await oraclesCommitAndReveal(claimId, assignedOracles, scores, patterns);
       await insurance.finalizeClaim(claimId);
 
       const info = await insurance.getClaimInfo(claimId);
-      expect(info.dispersione).to.equal(60);
-      // Median of [10,20,30,40,50,60,70] = 40
+      expect(info.dispersione).to.equal(10); // 45 - 35
+      // Median of sorted [35,37,38,40,40,42,45] = 40
       expect(info.finalFraudScore).to.equal(40);
     });
 
     it("should calculate median correctly for odd array", async function () {
-      // Unsorted: [90, 10, 50, 30, 70, 20, 60] -> sorted: [10,20,30,50,60,70,90] -> median=50
-      const scores = [90, 10, 50, 30, 70, 20, 60];
+      // Use converging scores to avoid secondary review
+      // Scores: [48, 50, 52, 50, 51, 49, 50] -> sorted: [48,49,50,50,50,51,52] -> median=50
+      const scores = [48, 50, 52, 50, 51, 49, 50];
       const patterns = [true, true, true, true, true, true, true];
 
       await oraclesCommitAndReveal(claimId, assignedOracles, scores, patterns);

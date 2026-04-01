@@ -89,7 +89,8 @@ library DataTypes {
         OracleStatus status;
         uint256 registrationTime;   // Timestamp of registerOracle()
         uint256 activationTime;     // Timestamp when oracle became Active
-        uint256 deviationScore;     // Count of deviations >= deltaWatchlist
+        uint256 deviationScore;     // Cumulative sum of absolute deviations from median
+        uint256 watchlistStrikes;   // Count of deviations >= deltaWatchlist
         uint256 watchlistPosition;  // Position in watchlist queue (0 = not watchlisted)
         uint256 lastResetTime;      // Last periodic score reset timestamp
         uint256 claimsEvaluated;    // Total claims evaluated
@@ -118,6 +119,7 @@ library DataTypes {
         uint256 timestamp;          // Claim submission time
         uint256 revealCount;        // Number of oracles that have revealed
         uint256 commitCount;        // Number of oracles that have committed
+        bool secondaryReview;       // Whether this claim has been through secondary review
     }
 
     /// @dev Insurance policy parameters

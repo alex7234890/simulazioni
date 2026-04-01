@@ -194,14 +194,19 @@ logs/
 
 ## Last Changes
 
-- **Correction 1: Premium per-swap, not per-policy**
-  - buyPolicy() now charges only a symbolic activation fee (1 MEVI) instead of the full premium
-  - New insuredSwap(swapValue) function: calculates premium via PremiumCalculator and charges per swap
-  - submitClaim() now takes a swapId parameter referencing a previously insured swap
-  - Added InsuredSwap struct to DataTypes.sol
-  - Daily swap limits moved from submitClaim to insuredSwap
-  - Updated all tests (ClaimManager, MEVInsurance, E2E, PremiumCalculator)
-  - Total: 379/379 tests passing (+1 new test for "swap already claimed")
+- **Merged Corrections 2-6** from phase-3-import-fix branch
+- **Correction 7: Secondary review for high dispersion**
+  - finalizeClaim() now triggers secondary review when dispersione > threshold (20) on first evaluation
+  - Claim is reset with fresh oracles for a second round of commit-reveal
+  - Added `secondaryReview` flag to Claim struct, `SecondaryReviewTriggered` event
+- **Correction 8: Cumulative deviation score + watchlistStrikes**
+  - recordDeviation() now accepts `uint256 _absoluteDeviation` parameter
+  - deviationScore accumulates sum of absolute deviations (not just a counter)
+  - Added separate `watchlistStrikes` counter: incremented only when deviation >= deltaWatchlist
+  - Watchlist triggered by watchlistStrikes >= kWatchlist (not deviationScore)
+  - resetDeviationScore() now also resets watchlistStrikes
+  - Updated getOracleInfo() to return watchlistStrikes
+- Total: 375/375 tests passing
 
 ## Next Tasks (Phases)
 
@@ -220,13 +225,13 @@ ALL 9 PHASES COMPLETE.
 ## Corrections (PDF Alignment)
 
 1. ~~Correzione 1: Premium per-swap~~ DONE
-2. Correzione 2: Coverage percentages (Low=50%, Medium=70%, High=100%)
-3. Correzione 3: Separare Fcov (premium) da coverage% (rimborso)
-4. Correzione 4: FraudScore range 0-130, θapprove=60, θreject=80
-5. Correzione 5: Reward oracle in finalizeClaim
-6. Correzione 6: Margine ms variabile nel PattUpdater
-7. Correzione 7: Revisione secondaria per alta dispersione
-8. Correzione 8: Score scostamento come somma cumulativa
+2. ~~Correzione 2: Coverage percentages (Low=50%, Medium=70%, High=100%)~~ DONE
+3. ~~Correzione 3: Separare Fcov (premium) da coverage% (rimborso)~~ DONE
+4. ~~Correzione 4: FraudScore range 0-130, θapprove=60, θreject=80~~ DONE
+5. ~~Correzione 5: Reward oracle in finalizeClaim~~ DONE
+6. ~~Correzione 6: Margine ms variabile nel PattUpdater~~ DONE
+7. ~~Correzione 7: Revisione secondaria per alta dispersione~~ DONE
+8. ~~Correzione 8: Score scostamento come somma cumulativa~~ DONE
 9. Correzione 9: Blacklist bot MEV
 10. Correzione 10: Penalità inattività oracle
 11. Correzione 11: Twatchlist periodo minimo osservazione

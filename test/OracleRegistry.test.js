@@ -198,32 +198,42 @@ describe("OracleRegistry", function () {
       await registry.connect(oracle1).activateOracle();
     });
 
-    it("should record deviation", async function () {
-      await registry.recordDeviation(oracle1.address);
-      const [, , , , deviationScore] = await registry.getOracleInfo(oracle1.address);
-      expect(deviationScore).to.equal(1);
+    it("should record deviation as cumulative sum", async function () {
+      await registry.recordDeviation(oracle1.address, 15);
+      const [, , , , deviationScore, , watchlistStrikes] = await registry.getOracleInfo(oracle1.address);
+      expect(deviationScore).to.equal(15);
+      expect(watchlistStrikes).to.equal(1); // 15 >= deltaWatchlist(10)
     });
 
-    it("should watchlist oracle after kWatchlist deviations", async function () {
-      // kWatchlist defaults to 2
-      await registry.recordDeviation(oracle1.address);
+    it("should not count strike for small deviation", async function () {
+      await registry.recordDeviation(oracle1.address, 5); // below deltaWatchlist=10
+      const [, , , , deviationScore, , watchlistStrikes] = await registry.getOracleInfo(oracle1.address);
+      expect(deviationScore).to.equal(5);
+      expect(watchlistStrikes).to.equal(0);
+    });
+
+    it("should watchlist oracle after kWatchlist strikes", async function () {
+      // kWatchlist defaults to 2, deltaWatchlist defaults to 10
+      await registry.recordDeviation(oracle1.address, 15);
       let [, status1] = await registry.getOracleInfo(oracle1.address);
       expect(status1).to.equal(OracleStatus.Active);
 
-      await registry.recordDeviation(oracle1.address);
-      let [, status2] = await registry.getOracleInfo(oracle1.address);
+      await registry.recordDeviation(oracle1.address, 12);
+      let [, status2, , , deviationScore, , watchlistStrikes] = await registry.getOracleInfo(oracle1.address);
       expect(status2).to.equal(OracleStatus.Watchlisted);
+      expect(deviationScore).to.equal(27); // 15 + 12
+      expect(watchlistStrikes).to.equal(2);
     });
 
     it("should emit OracleWatchlisted event", async function () {
-      await registry.recordDeviation(oracle1.address);
-      await expect(registry.recordDeviation(oracle1.address))
+      await registry.recordDeviation(oracle1.address, 15);
+      await expect(registry.recordDeviation(oracle1.address, 12))
         .to.emit(registry, "OracleWatchlisted");
     });
 
     it("should only allow owner or authorized to record deviations", async function () {
       await expect(
-        registry.connect(oracle1).recordDeviation(oracle1.address)
+        registry.connect(oracle1).recordDeviation(oracle1.address, 10)
       ).to.be.revertedWith("Not owner or authorized");
     });
   });
@@ -233,9 +243,9 @@ describe("OracleRegistry", function () {
       await registry.connect(oracle1).registerOracle({ value: BASE_STAKE });
       await time.increase(T_ACTIVATION);
       await registry.connect(oracle1).activateOracle();
-      // Watchlist oracle1
-      await registry.recordDeviation(oracle1.address);
-      await registry.recordDeviation(oracle1.address);
+      // Watchlist oracle1 (2 strikes with deviation >= deltaWatchlist)
+      await registry.recordDeviation(oracle1.address, 15);
+      await registry.recordDeviation(oracle1.address, 12);
     });
 
     it("should revert reset before Treset period", async function () {
@@ -244,12 +254,13 @@ describe("OracleRegistry", function () {
       ).to.be.revertedWith("Reset period not elapsed");
     });
 
-    it("should reset deviation score after Treset", async function () {
+    it("should reset deviation score and strikes after Treset", async function () {
       await time.increase(T_RESET);
       await registry.resetDeviationScore(oracle1.address);
 
-      const [, status, , , deviationScore] = await registry.getOracleInfo(oracle1.address);
+      const [, status, , , deviationScore, , watchlistStrikes] = await registry.getOracleInfo(oracle1.address);
       expect(deviationScore).to.equal(0);
+      expect(watchlistStrikes).to.equal(0);
       expect(status).to.equal(OracleStatus.Active); // Restored from watchlist
     });
 
@@ -308,8 +319,8 @@ describe("OracleRegistry", function () {
 
     it("should exclude watchlisted oracles", async function () {
       // Watchlist oracle1
-      await registry.recordDeviation(oracle1.address);
-      await registry.recordDeviation(oracle1.address);
+      await registry.recordDeviation(oracle1.address, 15);
+      await registry.recordDeviation(oracle1.address, 12);
 
       // Select all remaining eligible (7)
       const selected = await registry.selectOracles(42, 7);
@@ -428,8 +439,8 @@ describe("OracleRegistry", function () {
 
     it("should apply penalty for watchlisted oracle", async function () {
       // Watchlist oracle1
-      await registry.recordDeviation(oracle1.address);
-      await registry.recordDeviation(oracle1.address);
+      await registry.recordDeviation(oracle1.address, 15);
+      await registry.recordDeviation(oracle1.address, 12);
 
       const balanceBefore = await ethers.provider.getBalance(oracle1.address);
       await registry.rewardOracle(oracle1.address);

@@ -135,7 +135,7 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         require(msg.value >= reportDeposit, "Insufficient report deposit");
 
         // Verify accused oracle is active or watchlisted
-        (uint256 stake, DataTypes.OracleStatus oStatus,,,,) = oracleRegistry.getOracleInfo(_accusedOracle);
+        (uint256 stake, DataTypes.OracleStatus oStatus,,,,,) = oracleRegistry.getOracleInfo(_accusedOracle);
         require(
             oStatus == DataTypes.OracleStatus.Active ||
             oStatus == DataTypes.OracleStatus.Watchlisted,
@@ -275,7 +275,7 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
 
         if (median > 0) {
             // Oracle gets slashed
-            (uint256 oracleStake,,,,,) = oracleRegistry.getOracleInfo(r.accusedOracle);
+            (uint256 oracleStake,,,,,,) = oracleRegistry.getOracleInfo(r.accusedOracle);
             uint256 slashAmount = (oracleStake * median) / 100;
 
             // Slash the oracle in the registry

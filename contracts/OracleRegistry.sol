@@ -127,6 +127,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             registrationTime: block.timestamp,
             activationTime: 0,
             deviationScore: 0,
+            watchlistStrikes: 0,
             watchlistPosition: 0,
             lastResetTime: block.timestamp,
             claimsEvaluated: 0,
@@ -211,11 +212,12 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     // -------------------------------------------------------
 
     /**
-     * @dev Record a deviation for an oracle. Called internally by ClaimManager
-     * when an oracle's score deviates significantly from the median.
+     * @dev Record a deviation for an oracle. Called by ClaimManager
+     * when an oracle's score deviates from the median.
      * @param _oracle Address of the oracle
+     * @param _absoluteDeviation Absolute difference between oracle's score and median
      */
-    function recordDeviation(address _oracle) external onlyOwnerOrAuthorized {
+    function recordDeviation(address _oracle, uint256 _absoluteDeviation) external onlyOwnerOrAuthorized {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(
             info.status == DataTypes.OracleStatus.Active ||
@@ -223,15 +225,21 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             "Oracle not active"
         );
 
-        info.deviationScore++;
+        // Cumulative sum of absolute deviations
+        info.deviationScore += _absoluteDeviation;
         emit OracleDeviationRecorded(_oracle, info.deviationScore);
 
-        // Move to watchlist if threshold reached
-        if (info.deviationScore >= kWatchlist &&
-            info.status == DataTypes.OracleStatus.Active) {
-            info.status = DataTypes.OracleStatus.Watchlisted;
-            info.watchlistPosition = block.timestamp; // Use timestamp as position marker
-            emit OracleWatchlisted(_oracle, info.deviationScore);
+        // Count as a watchlist strike if deviation >= deltaWatchlist
+        if (_absoluteDeviation >= deltaWatchlist) {
+            info.watchlistStrikes++;
+
+            // Move to watchlist if strikes threshold reached
+            if (info.watchlistStrikes >= kWatchlist &&
+                info.status == DataTypes.OracleStatus.Active) {
+                info.status = DataTypes.OracleStatus.Watchlisted;
+                info.watchlistPosition = block.timestamp;
+                emit OracleWatchlisted(_oracle, info.deviationScore);
+            }
         }
     }
 
@@ -252,6 +260,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         );
 
         info.deviationScore = 0;
+        info.watchlistStrikes = 0;
         info.lastResetTime = block.timestamp;
 
         // Remove from watchlist if currently watchlisted
@@ -430,7 +439,8 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         uint256 registrationTime,
         uint256 activationTime,
         uint256 deviationScore,
-        uint256 claimsEvaluated
+        uint256 claimsEvaluated,
+        uint256 watchlistStrikes
     ) {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         return (
@@ -439,7 +449,8 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             info.registrationTime,
             info.activationTime,
             info.deviationScore,
-            info.claimsEvaluated
+            info.claimsEvaluated,
+            info.watchlistStrikes
         );
     }
 

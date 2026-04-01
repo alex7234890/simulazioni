@@ -139,6 +139,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         uint256 dispersione
     );
     event PayoutIssued(uint256 indexed claimId, address indexed user, uint256 amount);
+    event SecondaryReviewTriggered(uint256 indexed claimId, uint256 dispersione, address[] newOracles);
     event SwapInsured(
         uint256 indexed swapId,
         address indexed user,
@@ -462,6 +463,44 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             if (s > maxScore) maxScore = s;
         }
         claim.dispersione = maxScore - minScore;
+
+        // Step 3b: Secondary review if dispersione > threshold and not already reviewed
+        if (claim.dispersione > dispersioneThreshold && !claim.secondaryReview) {
+            claim.secondaryReview = true;
+
+            // Reset claim for new oracle round
+            delete claim.revealedScores;
+            claim.patternValidVotes = 0;
+            claim.patternInvalidVotes = 0;
+            claim.revealCount = 0;
+            claim.commitCount = 0;
+            claim.finalFraudScore = 0;
+            claim.dispersione = 0;
+            claim.status = DataTypes.ClaimStatus.OracleReview;
+            claim.timestamp = block.timestamp;
+
+            // Clear old commits/reveals for this claim
+            for (uint256 i = 0; i < claim.assignedOracles.length; i++) {
+                address oldOracle = claim.assignedOracles[i];
+                claimCommits[_claimId][oldOracle] = bytes32(0);
+                hasRevealed[_claimId][oldOracle] = false;
+            }
+
+            // Select new oracles
+            uint256 seed = uint256(keccak256(abi.encodePacked(
+                block.timestamp, block.prevrandao, claim.user, _claimId, uint256(1)
+            )));
+            address[] memory newOracles = oracleRegistry.selectOracles(seed, nOracle);
+
+            // Replace assigned oracles
+            delete claim.assignedOracles;
+            for (uint256 i = 0; i < newOracles.length; i++) {
+                claim.assignedOracles.push(newOracles[i]);
+            }
+
+            emit SecondaryReviewTriggered(_claimId, maxScore - minScore, newOracles);
+            return;
+        }
 
         // Step 4: Tier-based decision
         DataTypes.Tier userTier = userProfiles[claim.user].tier;
