@@ -165,9 +165,14 @@ contracts/
     DataTypesConsumer.sol       - Test helper for DataTypes
 scripts/
   deploy_token.js               - Deploy MEVToken to network
-  trader.py                     - Trader simulator (placeholder)
-  mev_bot.py                    - MEV bot simulator (placeholder)
-  oracle.py                     - Oracle service (placeholder)
+  deploy_all.js                 - Full deployment + wiring + funding (all 10 contracts)
+  utils.py                      - Shared Python utilities (web3, commit-reveal, helpers)
+  simulation.py                 - Sequential orchestrator (20-cycle end-to-end demo)
+  oracle.py                     - Standalone oracle node simulator
+  trader.py                     - Standalone trader simulator
+  mev_bot.py                    - MEV bot simulator (sandwich + direct)
+config/
+  deployed_addresses.json       - Auto-generated contract addresses from deploy_all.js
 test/
   MEVToken.test.js              - Token unit tests (8 tests)
   MEVInsurance.test.js          - Insurance legacy tests (9 tests)
@@ -237,6 +242,43 @@ logs/
 
 ALL 13 CORRECTIONS COMPLETE.
 
+13. **Operational Scripts (Deploy + Python Simulation Suite)**
+   - **scripts/deploy_all.js** (174 lines): Full deployment pipeline
+     - Deploys all 10 contracts in correct dependency order
+     - Wiring: insurance↔calculator, insurance↔tierSystem, calculator↔pattUpdater, registry↔insurance, registry↔slashingSystem
+     - Sets tActivation=0 for local testing (no oracle activation delay)
+     - Funding: 500k MEVI to insurance pool, 100k+100k AMM liquidity, 10 ETH to registry, 5 ETH to slashingSystem
+     - Saves all addresses to config/deployed_addresses.json
+   - **scripts/utils.py** (100 lines): Shared Python utilities
+     - Web3 connection, ABI loading, contract instantiation
+     - Transaction helper: send_tx() with gas/nonce management
+     - Commit-reveal: keccak256_commit() and keccak256_patt_commit() replicating Solidity encodePacked
+     - Helpers: generate_salt(), to_wei(), from_wei(), increase_time(), log()
+   - **scripts/simulation.py** (417 lines): Sequential orchestrator
+     - 20-cycle end-to-end simulation: insuredSwap → submitClaim → oracle commit-reveal → finalize → handle outcome
+     - Setup: funds trader/bot, registers 7 oracles, registers trader, buys High coverage policy
+     - Oracle fraud analysis: tier-based scoring, claim rate analysis, per-oracle variance
+     - Handles secondary review (re-does oracle round with converging scores)
+     - Handles CAPTCHA resolution (80% auto-approve)
+     - Comprehensive stats tracking + final report
+   - **scripts/oracle.py** (188 lines): Standalone oracle node simulator
+     - OracleNode class: register, analyze claims, commit-reveal cycle
+     - Fraud analysis: tier adjustment, claim rate scoring, loss amount analysis, per-oracle variance
+     - Poll mode: polls for new claims on interval, processes assigned ones
+     - CLI args: --oracle-idx (0-6), --cycles, --interval
+   - **scripts/trader.py** (193 lines): Standalone trader simulator
+     - Trader class: setup, execute insured swaps, detect MEV, submit claims
+     - Configurable claim rate, random swap values (50-500 MEVI)
+     - Sandwich detection simulation (35% chance)
+     - Session report with balance, profile, tier info
+     - CLI args: --swaps, --claim-rate
+   - **scripts/mev_bot.py** (213 lines): MEV bot simulator
+     - MEVBot class: sandwich attacks via SandwichBot contract, direct AMM swaps
+     - Funds bot account + SandwichBot contract with MEVI/USDC
+     - Tracks attack success/failure, profit, blacklist status
+     - Mixed mode: 60% sandwich, 40% direct
+     - CLI args: --attacks, --mode (sandwich/direct/mixed)
+
 ## Next Tasks (Phases)
 
 1. ~~Phase 1: Data structures and types~~ DONE
@@ -288,11 +330,26 @@ npx hardhat test
 npx hardhat run scripts/deploy_token.js
 ```
 
-### Deploy to Local Node
+### Deploy All Contracts (local node)
 ```bash
 # Terminal 1: Start local node
 npx hardhat node
 
-# Terminal 2: Deploy
-npx hardhat run scripts/deploy_token.js --network localhost
+# Terminal 2: Deploy all contracts
+npx hardhat run scripts/deploy_all.js --network localhost
+```
+
+### Run Full Simulation
+```bash
+# Terminal 1: npx hardhat node
+# Terminal 2: npx hardhat run scripts/deploy_all.js --network localhost
+# Terminal 3:
+python scripts/simulation.py          # 20-cycle orchestrated demo
+```
+
+### Run Individual Simulators
+```bash
+python scripts/trader.py --swaps 20 --claim-rate 0.6
+python scripts/oracle.py --oracle-idx 0 --cycles 50 --interval 2
+python scripts/mev_bot.py --attacks 10 --mode mixed
 ```
