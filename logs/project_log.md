@@ -242,7 +242,22 @@ logs/
 
 ALL 13 CORRECTIONS COMPLETE.
 
-13. **Operational Scripts (Deploy + Python Simulation Suite)**
+14. **CRITICO 1: RANDAO Randomness**
+   - Oracle selection seed already uses `block.prevrandao` (RANDAO beacon post-merge)
+   - Added clarifying comments: safe for simulation, production may use Chainlink VRF
+   - No code change needed, only documentation
+
+15. **CRITICO 2: Real Sandwich Pattern Verification**
+   - Added `getClaimDetails()` view function to MEVInsurance.sol
+     - Returns: user, txHash1-3, swapValue, loss, botAddress, secondaryReview
+     - Allows oracles to fetch full claim data for off-chain verification
+   - Rewrote `oracle.py` with real on-chain sandwich verification:
+     - Fetches all 3 tx via web3 `get_transaction()`
+     - 5-point verification: tx exist, same bot sender, same block, correct order, same pool
+     - Heuristic fallback for synthetic tx (simulation): bot address, loss ratio, attack history
+   - 389/389 tests still passing
+
+16. **Operational Scripts (Deploy + Python Simulation Suite)**
    - **scripts/deploy_all.js** (174 lines): Full deployment pipeline
      - Deploys all 10 contracts in correct dependency order
      - Wiring: insurance↔calculator, insurance↔tierSystem, calculator↔pattUpdater, registry↔insurance, registry↔slashingSystem
@@ -261,8 +276,15 @@ ALL 13 CORRECTIONS COMPLETE.
      - Handles secondary review (re-does oracle round with converging scores)
      - Handles CAPTCHA resolution (80% auto-approve)
      - Comprehensive stats tracking + final report
-   - **scripts/oracle.py** (188 lines): Standalone oracle node simulator
+   - **scripts/oracle.py** (~290 lines): Standalone oracle node simulator
      - OracleNode class: register, analyze claims, commit-reveal cycle
+     - **Real sandwich pattern verification** (PDF §3.2):
+       - Fetches txHash1/2/3 via getClaimDetails() getter
+       - Verifies tx existence on-chain
+       - Checks frontrun+backrun same sender (bot)
+       - Checks same block, correct ordering (frontrun < victim < backrun)
+       - Checks same pool/contract
+       - Falls back to heuristic (bot address, loss ratio, history) for synthetic tx in simulation
      - Fraud analysis: tier adjustment, claim rate scoring, loss amount analysis, per-oracle variance
      - Poll mode: polls for new claims on interval, processes assigned ones
      - CLI args: --oracle-idx (0-6), --cycles, --interval
