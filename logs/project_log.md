@@ -375,3 +375,16 @@ python scripts/trader.py --swaps 20 --claim-rate 0.6
 python scripts/oracle.py --oracle-idx 0 --cycles 50 --interval 2
 python scripts/mev_bot.py --attacks 10 --mode mixed
 ```
+
+17. **Fix simulation.py: 3 problemi critici**
+   - **Problema A — Dispersione fraud score troppo alta**
+     - Prima: ogni oracle generava `claim_rate_score = random.randint(0,30)` + `network_score = random.randint(0,15)` + `±10` indipendentemente → dispersione fino a 55 >> soglia 20 → secondary review ad ogni ciclo → second round falliva silenziosamente
+     - Ora: `compute_claim_base_score()` calcola un punteggio BASE deterministico dal profilo on-chain (stesso per tutti gli oracle). `oracle_score()` aggiunge solo rumore `±5` per oracle → dispersione max = 10 < soglia 20
+   - **Problema B — Daily swap limit non si resettava**
+     - Il contratto usa `block.timestamp / 1 days` che in simulazione non avanzava mai
+     - Aggiunto `increase_time(w3, 86400)` alla fine di ogni giornata simulata
+   - **Problema C — Config interattiva + display formula**
+     - `interactive_config()`: chiede n_days, avg_swap, n_users, n_oracles, claim_prob
+     - `show_formula_params()`: legge e mostra tutti i parametri dal contratto (Patt, L%, eFNR, mBase, pmin, Fcov, SR thresholds, θApprove, θReject, dispersioneThreshold, maxDailySwaps, activationFee, minStake)
+     - Stima swap e claim prima di partire
+     - Multi-user: layout account pulito (users[1..N_USERS], oracle[N_USERS+1..], bot[N_USERS+N_ORA+1])
