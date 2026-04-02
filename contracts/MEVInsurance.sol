@@ -356,7 +356,9 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
 
         DataTypes.UserProfile storage profile = userProfiles[msg.sender];
 
-        // Select oracles
+        // Select oracles via RANDAO-seeded Fisher-Yates (PDF §2.3)
+        // block.prevrandao = RANDAO beacon (post-merge), not manipulable by single validator
+        // Production: consider Chainlink VRF for stronger guarantees
         uint256 seed = uint256(keccak256(abi.encodePacked(
             block.timestamp, block.prevrandao, msg.sender, claimsArray.length
         )));
@@ -718,6 +720,24 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         require(_claimId < claimsArray.length, "Invalid claim ID");
         DataTypes.Claim storage c = claimsArray[_claimId];
         return (c.user, c.status, c.finalFraudScore, c.swapValue, c.loss, c.dispersione, c.revealCount, c.commitCount);
+    }
+
+    /**
+     * @dev Get full claim details including tx hashes and bot address (for oracle verification).
+     */
+    function getClaimDetails(uint256 _claimId) external view returns (
+        address user,
+        bytes32 txHash1,
+        bytes32 txHash2,
+        bytes32 txHash3,
+        uint256 swapValue,
+        uint256 loss,
+        address botAddress,
+        bool secondaryReview
+    ) {
+        require(_claimId < claimsArray.length, "Invalid claim ID");
+        DataTypes.Claim storage c = claimsArray[_claimId];
+        return (c.user, c.txHash1, c.txHash2, c.txHash3, c.swapValue, c.loss, c.botAddress, c.secondaryReview);
     }
 
     /**
