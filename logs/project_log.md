@@ -1,31 +1,26 @@
 # MEV Insurance Simulation - Project Log
 
 ## Completed Tasks
-
 1. **Project Initialization**
    - Initialized Hardhat 2 project with Solidity 0.8.20
    - Installed OpenZeppelin contracts
    - Installed Python dependencies (web3, eth-account)
    - Created project directory structure: contracts/, scripts/, tests/, logs/, docs/, config/
-
 2. **ERC20 Token (MEVToken.sol)**
    - Created MEV Insurance Token (MEVI) with 1,000,000 supply
    - Mints full supply to deployer
    - 8 unit tests passing (deployment, transfers, allowances)
    - Deployment script verified working
-
 3. **MEVInsurance Contract (base)**
    - Created MEVInsurance.sol with registerUser(), buyPolicy(), submitClaim()
    - Premium: 100 MEVI, Coverage: 1000 MEVI, Duration: 30 days
    - 15 unit tests passing (registration, policy purchase, claims, approvals)
-
 4. **Phase 1: Data Structures and Types (DataTypes.sol)**
    - Created contracts/libraries/DataTypes.sol with all shared types
    - Enums: Tier, CoverageLevel, ClaimStatus (6 states), OracleStatus (7 states)
    - Structs: UserProfile, OracleInfo, Claim, Policy
    - All numeric percentages in basis points (10000 = 100%)
    - 12 unit tests passing
-
 5. **Phase 2: OracleRegistry.sol**
    - Full oracle lifecycle: register -> activate -> withdraw
    - Logarithmic stake scaling: baseStake * log2(1 + activeOracleCount)
@@ -37,7 +32,6 @@
    - Slashing, expulsion, and reintegration support
    - All protocol parameters configurable by owner
    - 46 unit tests passing
-
 6. **Phase 3: ClaimManager (MEVInsurance.sol refactor)**
    - Complete rewrite of MEVInsurance.sol with commit-reveal oracle evaluation
    - Constructor now takes token + OracleRegistry addresses
@@ -60,7 +54,6 @@
    - All parameters configurable by owner
    - 56 new tests (ClaimManager.test.js) + 9 updated legacy tests
    - Total: 133/133 tests passing
-
 7. **Phase 4: PremiumCalculator.sol**
    - Premium formula from PDF section 1.4.6:
      P = max(V * [(Patt * L%) + (Tint * E/(1-E))/Vbase + Coracle24h/Vbase] * (1+M) * Fcov, Pmin * V)
@@ -76,7 +69,6 @@
    - Integrated with MEVInsurance.sol: buyPolicy uses calculator when set
    - 48 new tests (PremiumCalculator.test.js)
    - Total: 181/181 tests passing
-
 8. **Phase 5: TierSystem.sol**
    - Tier upgrade requirements from PDF Table 8:
      - Bronze -> Silver: 18 swaps, 30 days membership, avg fraud score < 52
@@ -88,11 +80,9 @@
    - payDebt(): partial/full debt payment, auto un-blacklist when debt = 0
    - Data sync from MEVInsurance (owner-triggered)
    - View helpers: canUpgradeToSilver(), canUpgradeToGold(), getMaxDailySwaps()
-   - All parameters configurable by owner
    - Integrated reference in MEVInsurance.sol
    - 59 new tests (TierSystem.test.js) including full lifecycle test
    - Total: 240/240 tests passing
-
 9. **Phase 6: SlashingSystem.sol**
    - Report submission: reporter deposits Creport = 0.014 ETH, jury of 7 selected
    - Jury selection excludes accused oracle (requests nJury+1, filters accused)
@@ -107,17 +97,14 @@
      - Median = 0: reporter deposit confiscated, distributed as jury reward
    - Pool management: accumulated slashing funds, owner withdrawable
    - Commit/reveal timeouts (2 days each), partial reveal finalization
-   - All parameters configurable by owner
    - 46 new tests (SlashingSystem.test.js)
    - Total: 286/286 tests passing
-
 10. **Phase 7: SandwichBot.sol + MockAMM.sol + MockUSDC.sol**
    - SandwichBot: executeFrontrun/executeBackrun with profit tracking per attack
    - MockAMM: constant product AMM (x*y=k) with addLiquidity, swap, getPrice, getAmountOut
    - MockUSDC: simple ERC20 mock as quote token
    - 29 new tests (SandwichBot.test.js)
    - Total: 315/315 tests passing
-
 11. **Phase 8: End-to-End Integration Test**
    - Full lifecycle: sandwich attack → claim → oracle commit-reveal → CAPTCHA → payout
    - Tier progression: Bronze → Silver → Gold → Platinum with requirements
@@ -130,7 +117,6 @@
    - Complete protocol smoke test (all contracts wired)
    - 17 new tests (E2E.test.js)
    - Total: 332/332 tests passing
-
 12. **Phase 9: PattUpdater.sol (Patt Update Mechanism)**
    - Oracle-driven periodic update of Patt (probability of attack) in PremiumCalculator
    - startPattUpdate(): selects Noracle_patt=5 oracles, starts commit phase
@@ -144,9 +130,7 @@
    - PremiumCalculator ownership transferred to PattUpdater
    - 46 new tests (PattUpdater.test.js)
    - Total: 378/378 tests passing
-
 ## Current Architecture
-
 ```
 contracts/
   MEVToken.sol                  - ERC20 token (MEVI, 1M supply)
@@ -200,18 +184,13 @@ test/
   PattUpdater.test.js            - Patt update mechanism tests (46 tests)
 logs/
   project_log.md                - This file
-```
-
 ## Tech Stack
-
 - **Smart Contracts:** Solidity 0.8.20, OpenZeppelin ERC20 + Ownable + ReentrancyGuard
 - **Compiler:** viaIR enabled, optimizer 200 runs
 - **Framework:** Hardhat 2.28.6
 - **Python:** web3.py, eth-account
 - **Networks:** Hardhat local (chainId 31337), Sepolia (planned)
-
 ## Last Changes
-
 - **Merged Corrections 2-6** from phase-3-import-fix branch
 - **Correction 7: Secondary review for high dispersion**
   - finalizeClaim() now triggers secondary review when dispersione > threshold (20) on first evaluation
@@ -252,11 +231,8 @@ logs/
   - Added getPremiumEstimate(swapValue, coverageLevel) view function for premium preview before insuredSwap()
   - 8 new tests (gas refund + premium estimate)
 - Total: 389/389 tests passing
-
 ALL 13 CORRECTIONS COMPLETE.
-
 ## Simulation Framework (Python)
-
 13. **Simulation Framework — Complete Rewrite**
     - Replaced placeholder scripts with full actor-based simulation architecture
     - **scripts/utils.py**: Complete rewrite with localhost/Sepolia dual-network support
@@ -304,7 +280,6 @@ ALL 13 CORRECTIONS COMPLETE.
       - Wires all contract references (setPremiumCalculator, setAuthorizedCaller, etc.)
       - Funds pool with 500k MEVI, AMM with 100k+100k liquidity
       - Saves addresses to config/deployed_addresses.json
-
     Usage:
     ```bash
     # Terminal 1
@@ -318,7 +293,6 @@ ALL 13 CORRECTIONS COMPLETE.
    - Oracle selection seed already uses `block.prevrandao` (RANDAO beacon post-merge)
    - Added clarifying comments: safe for simulation, production may use Chainlink VRF
    - No code change needed, only documentation
-
 15. **CRITICO 2: Real Sandwich Pattern Verification**
    - Added `getClaimDetails()` view function to MEVInsurance.sol
      - Returns: user, txHash1-3, swapValue, loss, botAddress, secondaryReview
@@ -328,7 +302,6 @@ ALL 13 CORRECTIONS COMPLETE.
      - 5-point verification: tx exist, same bot sender, same block, correct order, same pool
      - Heuristic fallback for synthetic tx (simulation): bot address, loss ratio, attack history
    - 389/389 tests still passing
-
 16. **Operational Scripts (Deploy + Python Simulation Suite)**
    - **scripts/deploy_all.js** (174 lines): Full deployment pipeline
      - Deploys all 10 contracts in correct dependency order
@@ -372,9 +345,7 @@ ALL 13 CORRECTIONS COMPLETE.
      - Tracks attack success/failure, profit, blacklist status
      - Mixed mode: 60% sandwich, 40% direct
      - CLI args: --attacks, --mode (sandwich/direct/mixed)
-
 ## Next Tasks (Phases)
-
 1. ~~Phase 1: Data structures and types~~ DONE
 2. ~~Phase 2: OracleRegistry.sol~~ DONE
 3. ~~Phase 3: ClaimManager (refactor MEVInsurance.sol)~~ DONE
@@ -384,11 +355,8 @@ ALL 13 CORRECTIONS COMPLETE.
 7. ~~Phase 7: SandwichBot.sol + MockAMM.sol~~ DONE
 8. ~~Phase 8: End-to-end test~~ DONE
 9. ~~Phase 9: Patt update mechanism~~ DONE
-
 ALL 9 PHASES COMPLETE.
-
 ## Corrections (PDF Alignment)
-
 1. ~~Correzione 1: Premium per-swap~~ DONE
 2. ~~Correzione 2: Coverage percentages (Low=50%, Medium=70%, High=100%)~~ DONE
 3. ~~Correzione 3: Separare Fcov (premium) da coverage% (rimborso)~~ DONE
@@ -402,34 +370,22 @@ ALL 9 PHASES COMPLETE.
 11. ~~Correzione 11: Twatchlist periodo minimo osservazione~~ DONE
 12. ~~Correzione 12: Dataset commitment nel PattUpdater~~ DONE (merged branch)
 13. ~~Correzione 13: Rimborso gas per claim approvati~~ DONE
-
 ## How to Run
-
 ### Prerequisites
 - Node.js installed
 - Python 3.10+ with web3.py 6+, eth-account
-
 ### Compile Contracts
 ```bash
 npx hardhat compile
-```
-
 ### Run Tests (389 passing)
-```bash
 npx hardhat test
-```
-
 ### Run Full Simulation (localhost)
-```bash
 # Terminal 1: Start local Hardhat node
 npx hardhat node
-
 # Terminal 2: Deploy all 10 contracts
 npx hardhat run scripts/deploy_all.js --network localhost
-
 # Terminal 3: Run simulation
 python scripts/launch.py --traders 3 --bots 1 --oracles 7 --days 5
-
 # With all options:
 python scripts/launch.py \
   --network localhost \
@@ -442,35 +398,20 @@ python scripts/launch.py \
   --claim-rate 0.6 \
   --log-file simulation.log \
   --dashboard
-```
-
 ### Deploy Token Only (legacy)
-```bash
 npx hardhat run scripts/deploy_token.js --network localhost
 ### Deploy All Contracts (local node)
-```bash
 # Terminal 1: Start local node
-npx hardhat node
-
 # Terminal 2: Deploy all contracts
-npx hardhat run scripts/deploy_all.js --network localhost
-```
-
 ### Run Full Simulation
-```bash
 # Terminal 1: npx hardhat node
 # Terminal 2: npx hardhat run scripts/deploy_all.js --network localhost
 # Terminal 3:
 python scripts/simulation.py          # 20-cycle orchestrated demo
-```
-
 ### Run Individual Simulators
-```bash
 python scripts/trader.py --swaps 20 --claim-rate 0.6
 python scripts/oracle.py --oracle-idx 0 --cycles 50 --interval 2
 python scripts/mev_bot.py --attacks 10 --mode mixed
-```
-
 17. **Fix simulation.py: 3 problemi critici**
    - **Problema A — Dispersione fraud score troppo alta**
      - Prima: ogni oracle generava `claim_rate_score = random.randint(0,30)` + `network_score = random.randint(0,15)` + `±10` indipendentemente → dispersione fino a 55 >> soglia 20 → secondary review ad ogni ciclo → second round falliva silenziosamente
