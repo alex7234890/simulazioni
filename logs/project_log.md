@@ -164,6 +164,19 @@ contracts/
   test/
     DataTypesConsumer.sol       - Test helper for DataTypes
 scripts/
+  launch.py                     - Simulation orchestrator (single entry point)
+  deploy_all.js                 - Full deployment of all 10 contracts with wiring
+  deploy_token.js               - Deploy MEVToken only
+  dashboard.py                  - Formatted terminal output (tables, reports)
+  utils.py                      - Shared utilities (web3, tx, logging, network support)
+  actors/
+    __init__.py                 - Package init
+    trader_actor.py             - TraderActor class (register, policy, swap, claim)
+    oracle_actor.py             - OracleActor class (FraudScore analysis, commit-reveal)
+    bot_actor.py                - BotActor class (sandwich attacks, profit tracking)
+  trader.py                     - Standalone trader script (legacy)
+  mev_bot.py                    - Standalone bot script (legacy)
+  oracle.py                     - Standalone oracle script (legacy)
   deploy_token.js               - Deploy MEVToken to network
   deploy_all.js                 - Full deployment + wiring + funding (all 10 contracts)
   utils.py                      - Shared Python utilities (web3, commit-reveal, helpers)
@@ -176,10 +189,10 @@ config/
 test/
   MEVToken.test.js              - Token unit tests (8 tests)
   MEVInsurance.test.js          - Insurance legacy tests (9 tests)
-  ClaimManager.test.js          - ClaimManager full tests (56 tests)
+  ClaimManager.test.js          - ClaimManager full tests (72 tests)
   DataTypes.test.js             - DataTypes unit tests (12 tests)
-  OracleRegistry.test.js        - Oracle registry tests (46 tests)
-  PremiumCalculator.test.js      - Premium calculator tests (48 tests)
+  OracleRegistry.test.js        - Oracle registry tests (52 tests)
+  PremiumCalculator.test.js      - Premium calculator tests (49 tests)
   TierSystem.test.js             - Tier system tests (59 tests)
   SlashingSystem.test.js         - Slashing system tests (46 tests)
   SandwichBot.test.js            - Sandwich attack + AMM tests (29 tests)
@@ -242,6 +255,65 @@ logs/
 
 ALL 13 CORRECTIONS COMPLETE.
 
+## Simulation Framework (Python)
+
+13. **Simulation Framework — Complete Rewrite**
+    - Replaced placeholder scripts with full actor-based simulation architecture
+    - **scripts/utils.py**: Complete rewrite with localhost/Sepolia dual-network support
+      - Colored ANSI logging (TRADE=green, ATTACK=red, ORACLE=blue, POOL=yellow, ERROR=red bold)
+      - Nonce management with automatic retry on failure
+      - `from_wei()` handles negative values (for P&L display)
+      - `increase_time()` works on localhost, no-op with warning on Sepolia
+      - `send_tx()` signs with private key on Sepolia, sends directly on localhost
+      - Optional file logging via `set_log_file()`
+    - **scripts/actors/oracle_actor.py**: FraudScore follows PDF section 1.3.11 exactly
+      - ScoreTier: Bronze=50, Silver=30, Gold=15, Platinum=0
+      - ScoreClaimRate (0-30): >30%→30, >20%→25, >10%→20, ≥6%→15, <6%→0
+      - ScoreNetwork (0-50): simulated BFS distance with realistic probability distribution
+        - Real attack: 90% score=0, 8% score=5, 2% score=15
+        - Non-attack: 70% score=0, 20% score=5, 8% score=15, 2% score=30
+      - Per-oracle persistent bias (±3) + jitter (±2) → typical dispersione 3-6 (under threshold 20)
+      - Separate commit and reveal phases
+    - **scripts/actors/trader_actor.py**: Full trader lifecycle
+      - Auto-renews expired policies
+      - Handles "Daily swap limit reached" gracefully (skips, doesn't retry)
+      - Handles "Policy expired" by auto-renewing and retrying
+      - Stats tracking: swaps, claims, premiums, payouts
+    - **scripts/actors/bot_actor.py**: MEV sandwich attack execution
+      - Uses SandwichBot contract for on-chain frontrun/backrun
+      - Probabilistic attack decisions via `should_attack()`
+      - Profit estimation and tracking
+      - On-chain blacklist status monitoring
+    - **scripts/dashboard.py**: Box-drawing formatted terminal output
+      - Daily summaries (swaps, claims, premiums, payouts, P&L)
+      - Pool status dashboard (balance, P&L, protocol parameters)
+      - Trader table (tier, swaps, claims, avg fraud score, balance, blacklist)
+      - Oracle table (status, stake, claims evaluated, deviation score)
+      - Bot table (attacks, success rate, profit, blacklist status)
+      - Final report with comprehensive statistics
+    - **scripts/launch.py**: Single entry point orchestrator
+      - CLI arguments: --traders, --bots, --oracles, --days, --attack-rate, --claim-rate, etc.
+      - Day-by-day simulation loop with time advancement
+      - Full pipeline per swap: insuredSwap → bot attack → submitClaim → oracle commit-reveal → finalizeClaim → CAPTCHA resolution
+      - Automatic daily swap limit management via evm_increaseTime
+      - Weekly dashboard display (--dashboard flag)
+      - Never crashes: catches all exceptions, logs, continues
+      - Fraudulent claim simulation (10% of non-attack claims)
+    - **scripts/deploy_all.js**: Full deployment of all 10 contracts with wiring
+      - Deploys MEVToken, OracleRegistry, PremiumCalculator, MEVInsurance, TierSystem, SlashingSystem, MockUSDC, MockAMM, SandwichBot, PattUpdater
+      - Wires all contract references (setPremiumCalculator, setAuthorizedCaller, etc.)
+      - Funds pool with 500k MEVI, AMM with 100k+100k liquidity
+      - Saves addresses to config/deployed_addresses.json
+
+    Usage:
+    ```bash
+    # Terminal 1
+    npx hardhat node
+    # Terminal 2
+    npx hardhat run scripts/deploy_all.js --network localhost
+    # Terminal 3
+    python scripts/launch.py --traders 3 --bots 1 --oracles 7 --days 5
+    ```
 14. **CRITICO 1: RANDAO Randomness**
    - Oracle selection seed already uses `block.prevrandao` (RANDAO beacon post-merge)
    - Added clarifying comments: safe for simulation, production may use Chainlink VRF
@@ -335,23 +407,46 @@ ALL 9 PHASES COMPLETE.
 
 ### Prerequisites
 - Node.js installed
-- Python installed with web3, eth-account
+- Python 3.10+ with web3.py 6+, eth-account
 
 ### Compile Contracts
 ```bash
 npx hardhat compile
 ```
 
-### Run Tests
+### Run Tests (389 passing)
 ```bash
 npx hardhat test
 ```
 
-### Deploy Token (local)
+### Run Full Simulation (localhost)
 ```bash
-npx hardhat run scripts/deploy_token.js
+# Terminal 1: Start local Hardhat node
+npx hardhat node
+
+# Terminal 2: Deploy all 10 contracts
+npx hardhat run scripts/deploy_all.js --network localhost
+
+# Terminal 3: Run simulation
+python scripts/launch.py --traders 3 --bots 1 --oracles 7 --days 5
+
+# With all options:
+python scripts/launch.py \
+  --network localhost \
+  --traders 5 \
+  --bots 2 \
+  --oracles 7 \
+  --days 30 \
+  --swap-interval 3 \
+  --attack-rate 0.15 \
+  --claim-rate 0.6 \
+  --log-file simulation.log \
+  --dashboard
 ```
 
+### Deploy Token Only (legacy)
+```bash
+npx hardhat run scripts/deploy_token.js --network localhost
 ### Deploy All Contracts (local node)
 ```bash
 # Terminal 1: Start local node

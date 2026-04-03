@@ -93,6 +93,11 @@ class OracleNode:
             "same_pool": False,
         }
 
+        try:
+            claim_details = self.insurance.functions.getClaimDetails(claim_id).call()
+            tx_hash1 = claim_details[1]
+            tx_hash2 = claim_details[2]
+            tx_hash3 = claim_details[3]
         # Fetch claim details (txHash1, txHash2, txHash3, botAddress)
         try:
             claim_details = self.insurance.functions.getClaimDetails(claim_id).call()
@@ -125,6 +130,11 @@ class OracleNode:
             if not tx2: missing.append("victim")
             if not tx3: missing.append("backrun")
             log(f"    Missing transactions: {', '.join(missing)}")
+            return self._heuristic_pattern_check(claim_id, claimed_bot)
+
+        if tx1["from"] == tx3["from"]:
+            details["same_bot_sender"] = True
+            log(f"    Frontrun & backrun same sender: {tx1['from'][:10]}...")
             # In simulation, tx hashes are synthetic (keccak of strings)
             # so they won't exist on-chain. Fall back to heuristic check.
             return self._heuristic_pattern_check(claim_id, claimed_bot)
@@ -160,6 +170,11 @@ class OracleNode:
                 details["same_pool"] = True
                 log(f"    Same pool: {tx1['to'][:10]}...")
             elif tx1["to"] == tx3["to"]:
+                details["same_pool"] = True
+                log(f"    Frontrun & backrun same pool, victim via different entry")
+
+        checks_passed = sum(details.values())
+        pattern_valid = checks_passed >= 4
                 # Frontrun and backrun same pool, victim might go through router
                 details["same_pool"] = True
                 log(f"    Frontrun & backrun same pool, victim via different entry")
@@ -174,6 +189,10 @@ class OracleNode:
     def _heuristic_pattern_check(self, claim_id, claimed_bot):
         """
         Fallback heuristic when tx hashes are synthetic (simulation mode).
+        """
+        details = {"heuristic": True}
+
+        has_bot = claimed_bot != "0x0000000000000000000000000000000000000000"
         Checks on-chain state for consistency signals.
         """
         details = {"heuristic": True}
@@ -202,6 +221,9 @@ class OracleNode:
             else:
                 reasonable_loss = False
         except Exception:
+            reasonable_loss = True
+
+        base_validity = 0.70
             reasonable_loss = True  # Benefit of the doubt
 
         # Heuristic: valid if bot provided AND loss is reasonable
@@ -229,6 +251,8 @@ class OracleNode:
         Perform fraud analysis for a given claim.
         Returns (fraud_score, pattern_valid).
         """
+        pattern_valid, pattern_details = self.verify_sandwich_pattern(claim_id)
+
         # Step 1: Verify sandwich pattern (real or heuristic)
         pattern_valid, pattern_details = self.verify_sandwich_pattern(claim_id)
 
@@ -246,6 +270,13 @@ class OracleNode:
         if claimant:
             try:
                 profile = self.insurance.functions.getUserProfile(claimant).call()
+                tier = profile[0]
+                total_swaps = profile[2]
+                total_claims = profile[3]
+
+                tier_adjustment = {0: 15, 1: 5, 2: -5, 3: -15}
+                base_score += tier_adjustment.get(tier, 0)
+
                 tier = profile[0]  # 0=Bronze, 1=Silver, 2=Gold, 3=Platinum
                 total_swaps = profile[2]
                 total_claims = profile[3]
@@ -271,6 +302,13 @@ class OracleNode:
             base_score += 10
         if loss > to_wei(400):
             base_score += 10
+
+        if pattern_details.get("tx_exist"):
+            checks = sum(v for k, v in pattern_details.items() if isinstance(v, bool))
+            if checks >= 4:
+                base_score -= 10
+            elif checks <= 2:
+                base_score += 15
 
         # If pattern verification was strong (real tx found), adjust score
         if pattern_details.get("tx_exist"):

@@ -123,6 +123,8 @@ class MEVBot:
             self.stats["attacks_failed"] += 1
             return False
 
+        # Execute backrun
+        backrun_wei = frontrun_wei
         # Simulate victim swap happening (in real MEV, this is the pending tx)
         # Here we just note it would happen between our front/back runs
 
@@ -143,6 +145,7 @@ class MEVBot:
         profit = int(victim_swap_value * random.uniform(0.01, 0.05))
         self.stats["attacks_successful"] += 1
         self.stats["total_profit"] += to_wei(profit)
+        self.stats["total_cost"] += to_wei(frontrun_amount * 2)
         self.stats["total_cost"] += to_wei(frontrun_amount * 2)  # gas approximation
         log(f"  Sandwich profit: ~{profit} MEVI")
         return True
