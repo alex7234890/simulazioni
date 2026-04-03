@@ -177,6 +177,15 @@ scripts/
   trader.py                     - Standalone trader script (legacy)
   mev_bot.py                    - Standalone bot script (legacy)
   oracle.py                     - Standalone oracle script (legacy)
+  deploy_token.js               - Deploy MEVToken to network
+  deploy_all.js                 - Full deployment + wiring + funding (all 10 contracts)
+  utils.py                      - Shared Python utilities (web3, commit-reveal, helpers)
+  simulation.py                 - Sequential orchestrator (20-cycle end-to-end demo)
+  oracle.py                     - Standalone oracle node simulator
+  trader.py                     - Standalone trader simulator
+  mev_bot.py                    - MEV bot simulator (sandwich + direct)
+config/
+  deployed_addresses.json       - Auto-generated contract addresses from deploy_all.js
 test/
   MEVToken.test.js              - Token unit tests (8 tests)
   MEVInsurance.test.js          - Insurance legacy tests (9 tests)
@@ -305,6 +314,64 @@ ALL 13 CORRECTIONS COMPLETE.
     # Terminal 3
     python scripts/launch.py --traders 3 --bots 1 --oracles 7 --days 5
     ```
+14. **CRITICO 1: RANDAO Randomness**
+   - Oracle selection seed already uses `block.prevrandao` (RANDAO beacon post-merge)
+   - Added clarifying comments: safe for simulation, production may use Chainlink VRF
+   - No code change needed, only documentation
+
+15. **CRITICO 2: Real Sandwich Pattern Verification**
+   - Added `getClaimDetails()` view function to MEVInsurance.sol
+     - Returns: user, txHash1-3, swapValue, loss, botAddress, secondaryReview
+     - Allows oracles to fetch full claim data for off-chain verification
+   - Rewrote `oracle.py` with real on-chain sandwich verification:
+     - Fetches all 3 tx via web3 `get_transaction()`
+     - 5-point verification: tx exist, same bot sender, same block, correct order, same pool
+     - Heuristic fallback for synthetic tx (simulation): bot address, loss ratio, attack history
+   - 389/389 tests still passing
+
+16. **Operational Scripts (Deploy + Python Simulation Suite)**
+   - **scripts/deploy_all.js** (174 lines): Full deployment pipeline
+     - Deploys all 10 contracts in correct dependency order
+     - Wiring: insurance↔calculator, insurance↔tierSystem, calculator↔pattUpdater, registry↔insurance, registry↔slashingSystem
+     - Sets tActivation=0 for local testing (no oracle activation delay)
+     - Funding: 500k MEVI to insurance pool, 100k+100k AMM liquidity, 10 ETH to registry, 5 ETH to slashingSystem
+     - Saves all addresses to config/deployed_addresses.json
+   - **scripts/utils.py** (100 lines): Shared Python utilities
+     - Web3 connection, ABI loading, contract instantiation
+     - Transaction helper: send_tx() with gas/nonce management
+     - Commit-reveal: keccak256_commit() and keccak256_patt_commit() replicating Solidity encodePacked
+     - Helpers: generate_salt(), to_wei(), from_wei(), increase_time(), log()
+   - **scripts/simulation.py** (417 lines): Sequential orchestrator
+     - 20-cycle end-to-end simulation: insuredSwap → submitClaim → oracle commit-reveal → finalize → handle outcome
+     - Setup: funds trader/bot, registers 7 oracles, registers trader, buys High coverage policy
+     - Oracle fraud analysis: tier-based scoring, claim rate analysis, per-oracle variance
+     - Handles secondary review (re-does oracle round with converging scores)
+     - Handles CAPTCHA resolution (80% auto-approve)
+     - Comprehensive stats tracking + final report
+   - **scripts/oracle.py** (~290 lines): Standalone oracle node simulator
+     - OracleNode class: register, analyze claims, commit-reveal cycle
+     - **Real sandwich pattern verification** (PDF §3.2):
+       - Fetches txHash1/2/3 via getClaimDetails() getter
+       - Verifies tx existence on-chain
+       - Checks frontrun+backrun same sender (bot)
+       - Checks same block, correct ordering (frontrun < victim < backrun)
+       - Checks same pool/contract
+       - Falls back to heuristic (bot address, loss ratio, history) for synthetic tx in simulation
+     - Fraud analysis: tier adjustment, claim rate scoring, loss amount analysis, per-oracle variance
+     - Poll mode: polls for new claims on interval, processes assigned ones
+     - CLI args: --oracle-idx (0-6), --cycles, --interval
+   - **scripts/trader.py** (193 lines): Standalone trader simulator
+     - Trader class: setup, execute insured swaps, detect MEV, submit claims
+     - Configurable claim rate, random swap values (50-500 MEVI)
+     - Sandwich detection simulation (35% chance)
+     - Session report with balance, profile, tier info
+     - CLI args: --swaps, --claim-rate
+   - **scripts/mev_bot.py** (213 lines): MEV bot simulator
+     - MEVBot class: sandwich attacks via SandwichBot contract, direct AMM swaps
+     - Funds bot account + SandwichBot contract with MEVI/USDC
+     - Tracks attack success/failure, profit, blacklist status
+     - Mixed mode: 60% sandwich, 40% direct
+     - CLI args: --attacks, --mode (sandwich/direct/mixed)
 
 ## Next Tasks (Phases)
 
@@ -380,4 +447,39 @@ python scripts/launch.py \
 ### Deploy Token Only (legacy)
 ```bash
 npx hardhat run scripts/deploy_token.js --network localhost
+### Deploy All Contracts (local node)
+```bash
+# Terminal 1: Start local node
+npx hardhat node
+
+# Terminal 2: Deploy all contracts
+npx hardhat run scripts/deploy_all.js --network localhost
 ```
+
+### Run Full Simulation
+```bash
+# Terminal 1: npx hardhat node
+# Terminal 2: npx hardhat run scripts/deploy_all.js --network localhost
+# Terminal 3:
+python scripts/simulation.py          # 20-cycle orchestrated demo
+```
+
+### Run Individual Simulators
+```bash
+python scripts/trader.py --swaps 20 --claim-rate 0.6
+python scripts/oracle.py --oracle-idx 0 --cycles 50 --interval 2
+python scripts/mev_bot.py --attacks 10 --mode mixed
+```
+
+17. **Fix simulation.py: 3 problemi critici**
+   - **Problema A — Dispersione fraud score troppo alta**
+     - Prima: ogni oracle generava `claim_rate_score = random.randint(0,30)` + `network_score = random.randint(0,15)` + `±10` indipendentemente → dispersione fino a 55 >> soglia 20 → secondary review ad ogni ciclo → second round falliva silenziosamente
+     - Ora: `compute_claim_base_score()` calcola un punteggio BASE deterministico dal profilo on-chain (stesso per tutti gli oracle). `oracle_score()` aggiunge solo rumore `±5` per oracle → dispersione max = 10 < soglia 20
+   - **Problema B — Daily swap limit non si resettava**
+     - Il contratto usa `block.timestamp / 1 days` che in simulazione non avanzava mai
+     - Aggiunto `increase_time(w3, 86400)` alla fine di ogni giornata simulata
+   - **Problema C — Config interattiva + display formula**
+     - `interactive_config()`: chiede n_days, avg_swap, n_users, n_oracles, claim_prob
+     - `show_formula_params()`: legge e mostra tutti i parametri dal contratto (Patt, L%, eFNR, mBase, pmin, Fcov, SR thresholds, θApprove, θReject, dispersioneThreshold, maxDailySwaps, activationFee, minStake)
+     - Stima swap e claim prima di partire
+     - Multi-user: layout account pulito (users[1..N_USERS], oracle[N_USERS+1..], bot[N_USERS+N_ORA+1])

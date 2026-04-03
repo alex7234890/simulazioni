@@ -125,6 +125,11 @@ class MEVBot:
 
         # Execute backrun
         backrun_wei = frontrun_wei
+        # Simulate victim swap happening (in real MEV, this is the pending tx)
+        # Here we just note it would happen between our front/back runs
+
+        # Execute backrun
+        backrun_wei = frontrun_wei  # Sell same amount back
         usdc_addr = self.usdc.address
         try:
             send_tx(self.w3, self.bot_contract.functions.executeBackrun(
@@ -141,12 +146,14 @@ class MEVBot:
         self.stats["attacks_successful"] += 1
         self.stats["total_profit"] += to_wei(profit)
         self.stats["total_cost"] += to_wei(frontrun_amount * 2)
+        self.stats["total_cost"] += to_wei(frontrun_amount * 2)  # gas approximation
         log(f"  Sandwich profit: ~{profit} MEVI")
         return True
 
     def execute_direct_swap_attack(self, swap_value=None):
         """
         Simplified attack: directly swap on AMM to manipulate price.
+        Doesn't require SandwichBot contract.
         """
         if swap_value is None:
             swap_value = random.randint(20, 200)
@@ -154,6 +161,7 @@ class MEVBot:
         swap_wei = to_wei(swap_value)
         self.stats["attacks_attempted"] += 1
 
+        # Approve AMM to spend bot's tokens
         try:
             send_tx(self.w3, self.token.functions.approve(self.amm.address, swap_wei), self.address)
             send_tx(self.w3, self.amm.functions.swap(self.token.address, swap_wei), self.address)
@@ -208,6 +216,7 @@ def main():
         elif args.mode == "direct":
             bot.execute_direct_swap_attack()
         else:
+            # Mixed: 60% sandwich, 40% direct
             if random.random() < 0.60:
                 bot.execute_sandwich()
             else:

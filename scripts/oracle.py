@@ -63,6 +63,8 @@ class OracleNode:
         else:
             log(f"Oracle #{self.oracle_idx} ({self.address[:10]}...) already registered")
 
+    # ─── Sandwich Pattern Verification (PDF §3.2) ───
+
     def _fetch_tx(self, tx_hash):
         """Fetch a transaction by hash. Returns None if not found."""
         try:
@@ -75,6 +77,13 @@ class OracleNode:
         """
         Verify the sandwich attack pattern from on-chain transaction data.
         Returns (pattern_valid, verification_details).
+
+        Checks:
+          1. All 3 tx hashes exist on-chain
+          2. Frontrun (tx1) and backrun (tx3) have the same sender (the bot)
+          3. All 3 are in the same block
+          4. Ordering: tx1.index < tx2.index < tx3.index
+          5. All 3 interact with the same contract (pool/AMM)
         """
         details = {
             "tx_exist": False,
@@ -89,16 +98,25 @@ class OracleNode:
             tx_hash1 = claim_details[1]
             tx_hash2 = claim_details[2]
             tx_hash3 = claim_details[3]
+        # Fetch claim details (txHash1, txHash2, txHash3, botAddress)
+        try:
+            claim_details = self.insurance.functions.getClaimDetails(claim_id).call()
+            # Returns: (user, txHash1, txHash2, txHash3, swapValue, loss, botAddress, secondaryReview)
+            tx_hash1 = claim_details[1]  # frontrun
+            tx_hash2 = claim_details[2]  # victim
+            tx_hash3 = claim_details[3]  # backrun
             claimed_bot = claim_details[6]
         except Exception as e:
             log(f"    Cannot read claim details: {e}")
             return False, details
 
+        # Check for zero hashes (no real tx provided)
         zero_hash = b'\x00' * 32
         if tx_hash1 == zero_hash or tx_hash2 == zero_hash or tx_hash3 == zero_hash:
             log(f"    Zero tx hash detected - no real transactions")
             return False, details
 
+        # 1. Fetch all 3 transactions
         tx1 = self._fetch_tx(tx_hash1)
         tx2 = self._fetch_tx(tx_hash2)
         tx3 = self._fetch_tx(tx_hash3)
@@ -117,24 +135,36 @@ class OracleNode:
         if tx1["from"] == tx3["from"]:
             details["same_bot_sender"] = True
             log(f"    Frontrun & backrun same sender: {tx1['from'][:10]}...")
+            # In simulation, tx hashes are synthetic (keccak of strings)
+            # so they won't exist on-chain. Fall back to heuristic check.
+            return self._heuristic_pattern_check(claim_id, claimed_bot)
+
+        # 2. Verify frontrun and backrun have the same sender (the bot)
+        if tx1["from"] == tx3["from"]:
+            details["same_bot_sender"] = True
+            log(f"    Frontrun & backrun same sender: {tx1['from'][:10]}...")
+            # Cross-check with claimed bot address
             if claimed_bot != "0x0000000000000000000000000000000000000000":
                 if tx1["from"].lower() != claimed_bot.lower():
                     log(f"    WARNING: Bot sender mismatch with claimed bot")
         else:
             log(f"    Frontrun sender ({tx1['from'][:10]}) != Backrun sender ({tx3['from'][:10]})")
 
+        # 3. All in the same block
         if tx1["blockNumber"] == tx2["blockNumber"] == tx3["blockNumber"]:
             details["same_block"] = True
             log(f"    All in block #{tx1['blockNumber']}")
         else:
             log(f"    Different blocks: {tx1['blockNumber']}, {tx2['blockNumber']}, {tx3['blockNumber']}")
 
+        # 4. Correct ordering: frontrun.index < victim.index < backrun.index
         if (tx1["transactionIndex"] < tx2["transactionIndex"] < tx3["transactionIndex"]):
             details["correct_order"] = True
             log(f"    Correct order: idx {tx1['transactionIndex']} < {tx2['transactionIndex']} < {tx3['transactionIndex']}")
         else:
             log(f"    Wrong order: {tx1['transactionIndex']}, {tx2['transactionIndex']}, {tx3['transactionIndex']}")
 
+        # 5. All interact with the same contract (pool)
         if tx1["to"] and tx2["to"] and tx3["to"]:
             if tx1["to"] == tx2["to"] == tx3["to"]:
                 details["same_pool"] = True
@@ -145,6 +175,13 @@ class OracleNode:
 
         checks_passed = sum(details.values())
         pattern_valid = checks_passed >= 4
+                # Frontrun and backrun same pool, victim might go through router
+                details["same_pool"] = True
+                log(f"    Frontrun & backrun same pool, victim via different entry")
+
+        # Pattern is valid if all critical checks pass
+        checks_passed = sum(details.values())
+        pattern_valid = checks_passed >= 4  # At least 4/5 checks
         log(f"    Pattern verification: {checks_passed}/5 checks passed -> {'VALID' if pattern_valid else 'INVALID'}")
 
         return pattern_valid, details
@@ -156,6 +193,14 @@ class OracleNode:
         details = {"heuristic": True}
 
         has_bot = claimed_bot != "0x0000000000000000000000000000000000000000"
+        Checks on-chain state for consistency signals.
+        """
+        details = {"heuristic": True}
+
+        # Check if a bot address was provided
+        has_bot = claimed_bot != "0x0000000000000000000000000000000000000000"
+
+        # Check if bot is known (has previous attack history)
         bot_known = False
         if has_bot:
             try:
@@ -164,12 +209,14 @@ class OracleNode:
             except Exception:
                 pass
 
+        # Check claim loss vs swap value ratio
         try:
             claim_details = self.insurance.functions.getClaimDetails(claim_id).call()
             swap_value = claim_details[4]
             loss = claim_details[5]
             if swap_value > 0:
                 loss_ratio = loss / swap_value
+                # Sandwich typically extracts 2-20% of swap value
                 reasonable_loss = 0.01 <= loss_ratio <= 0.25
             else:
                 reasonable_loss = False
@@ -177,6 +224,11 @@ class OracleNode:
             reasonable_loss = True
 
         base_validity = 0.70
+            reasonable_loss = True  # Benefit of the doubt
+
+        # Heuristic: valid if bot provided AND loss is reasonable
+        # With per-oracle variance
+        base_validity = 0.70  # 70% base
         if has_bot:
             base_validity += 0.15
         if bot_known:
@@ -192,6 +244,8 @@ class OracleNode:
 
         return pattern_valid, details
 
+    # ─── Fraud Score Analysis ───
+
     def analyze_claim(self, claim_id):
         """
         Perform fraud analysis for a given claim.
@@ -199,6 +253,10 @@ class OracleNode:
         """
         pattern_valid, pattern_details = self.verify_sandwich_pattern(claim_id)
 
+        # Step 1: Verify sandwich pattern (real or heuristic)
+        pattern_valid, pattern_details = self.verify_sandwich_pattern(claim_id)
+
+        # Step 2: Calculate fraud score based on user profile
         try:
             claim_info = self.insurance.functions.getClaimInfo(claim_id).call()
             claimant = claim_info[0]
@@ -219,6 +277,15 @@ class OracleNode:
                 tier_adjustment = {0: 15, 1: 5, 2: -5, 3: -15}
                 base_score += tier_adjustment.get(tier, 0)
 
+                tier = profile[0]  # 0=Bronze, 1=Silver, 2=Gold, 3=Platinum
+                total_swaps = profile[2]
+                total_claims = profile[3]
+
+                # Higher tier = lower base risk
+                tier_adjustment = {0: 15, 1: 5, 2: -5, 3: -15}
+                base_score += tier_adjustment.get(tier, 0)
+
+                # High claim rate is suspicious
                 if total_swaps > 0:
                     claim_rate = total_claims / total_swaps
                     if claim_rate > 0.5:
@@ -230,6 +297,7 @@ class OracleNode:
             except Exception:
                 pass
 
+        # Loss amount analysis
         if loss > to_wei(200):
             base_score += 10
         if loss > to_wei(400):
@@ -242,6 +310,15 @@ class OracleNode:
             elif checks <= 2:
                 base_score += 15
 
+        # If pattern verification was strong (real tx found), adjust score
+        if pattern_details.get("tx_exist"):
+            checks = sum(v for k, v in pattern_details.items() if isinstance(v, bool))
+            if checks >= 4:
+                base_score -= 10  # Strong evidence reduces fraud suspicion
+            elif checks <= 2:
+                base_score += 15  # Weak evidence increases fraud suspicion
+
+        # Per-oracle variance
         variance = random.randint(-8, 8)
         fraud_score = max(0, min(130, base_score + variance))
 
@@ -251,6 +328,8 @@ class OracleNode:
             self.stats["patterns_invalid"] += 1
 
         return fraud_score, pattern_valid
+
+    # ─── Claim Processing ───
 
     def process_claim(self, claim_id):
         """Full commit-reveal cycle for a single claim."""
@@ -264,10 +343,12 @@ class OracleNode:
 
         log(f"  Oracle #{self.oracle_idx} assigned to claim #{claim_id}")
 
+        # Analyze (includes pattern verification)
         fraud_score, pattern_valid = self.analyze_claim(claim_id)
         salt = generate_salt()
         commit_hash = keccak256_commit(fraud_score, pattern_valid, salt)
 
+        # Commit
         try:
             send_tx(self.w3, self.insurance.functions.commitVerdict(claim_id, commit_hash), self.address)
             self.stats["commits"] += 1
@@ -276,6 +357,7 @@ class OracleNode:
             log(f"  Oracle #{self.oracle_idx} commit failed: {e}")
             return False
 
+        # Reveal
         try:
             send_tx(self.w3, self.insurance.functions.revealVerdict(
                 claim_id, fraud_score, pattern_valid, salt
