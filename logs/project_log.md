@@ -1,485 +1,168 @@
-# MEV Insurance Simulation - Project Log
+# MEV Insurance — Project Log
 
-## Completed Tasks
+## Stack
 
-1. **Project Initialization**
-   - Initialized Hardhat 2 project with Solidity 0.8.20
-   - Installed OpenZeppelin contracts
-   - Installed Python dependencies (web3, eth-account)
-   - Created project directory structure: contracts/, scripts/, tests/, logs/, docs/, config/
+| Component | Version |
+|-----------|---------|
+| Solidity  | 0.8.20  |
+| Hardhat   | 2.28.6  |
+| OpenZeppelin | 5.x |
+| web3.py   | 6.x     |
+| Python    | 3.10+   |
 
-2. **ERC20 Token (MEVToken.sol)**
-   - Created MEV Insurance Token (MEVI) with 1,000,000 supply
-   - Mints full supply to deployer
-   - 8 unit tests passing (deployment, transfers, allowances)
-   - Deployment script verified working
+---
 
-3. **MEVInsurance Contract (base)**
-   - Created MEVInsurance.sol with registerUser(), buyPolicy(), submitClaim()
-   - Premium: 100 MEVI, Coverage: 1000 MEVI, Duration: 30 days
-   - 15 unit tests passing (registration, policy purchase, claims, approvals)
+## Contracts (10 total)
 
-4. **Phase 1: Data Structures and Types (DataTypes.sol)**
-   - Created contracts/libraries/DataTypes.sol with all shared types
-   - Enums: Tier, CoverageLevel, ClaimStatus (6 states), OracleStatus (7 states)
-   - Structs: UserProfile, OracleInfo, Claim, Policy
-   - All numeric percentages in basis points (10000 = 100%)
-   - 12 unit tests passing
+| Contract | Description |
+|----------|-------------|
+| `MEVToken.sol` | ERC20 MEVI token (1M supply) |
+| `MockUSDC.sol` | Mock USDC for AMM trading |
+| `MockAMM.sol` | Minimal AMM (MEVI/USDC pool) |
+| `SandwichBot.sol` | Executes frontrun/backrun on MockAMM |
+| `OracleRegistry.sol` | Register, stake, activate/suspend oracles |
+| `PremiumCalculator.sol` | Dynamic premium based on patt, tier, swap value |
+| `MEVInsurance.sol` | Core policy/claim/payout logic |
+| `DataTypes.sol` (lib) | Shared structs: Policy, Claim, etc. |
+| `ClaimManager.sol` (lib) | Claim resolution logic |
+| `MathUtils.sol` (lib) | Safe math helpers |
 
-5. **Phase 2: OracleRegistry.sol**
-   - Full oracle lifecycle: register -> activate -> withdraw
-   - Logarithmic stake scaling: baseStake * log2(1 + activeOracleCount)
-   - Activation delay (7 days), withdrawal cooldown (30 days)
-   - Deviation tracking & automatic watchlisting (after 2 deviations)
-   - Periodic deviation score reset (every 30 days)
-   - Pseudo-random oracle selection (Fisher-Yates), excludes watchlisted + withdrawing
-   - Reward system with 50% penalty for watchlisted oracles
-   - Slashing, expulsion, and reintegration support
-   - All protocol parameters configurable by owner
-   - 46 unit tests passing
+---
 
-6. **Phase 3: ClaimManager (MEVInsurance.sol refactor)**
-   - Complete rewrite of MEVInsurance.sol with commit-reveal oracle evaluation
-   - Constructor now takes token + OracleRegistry addresses
-   - User registration with Bronze tier default, registered users mapping
-   - Policy purchase with CoverageLevel (Low/Medium/High) selection
-   - submitClaim(): 3 tx hashes + swapValue + loss, auto-selects 7 oracles via OracleRegistry
-   - Daily swap limits per tier (Bronze/Silver: 3, Gold: 4, Platinum: unlimited)
-   - commitVerdict(): oracle submits keccak256(fraudScore, patternValid, salt) hash
-   - revealVerdict(): oracle reveals score + pattern validity, verified against commit
-   - finalizeClaim(): full decision logic:
-     - Pattern invalidity check (>=70% invalid votes -> immediate rejection)
-     - Median fraud score calculation (insertion sort)
-     - Dispersione (max-min) tracking
-     - Tier-based thresholds: Bronze/Silver (CAPTCHA or blacklist), Gold/Platinum (approve, CAPTCHA, or blacklist)
-   - resolveCAPTCHA(): owner resolves CAPTCHA-required claims
-   - Coverage payouts: Low=70%, Medium=90%, High=100% of claimed loss
-   - Blacklist system with 20% penalty debt on rejected claims
-   - Running average fraud score per user
-   - Oracle timeout (3 days) allows finalization with partial reveals
-   - All parameters configurable by owner
-   - 56 new tests (ClaimManager.test.js) + 9 updated legacy tests
-   - Total: 133/133 tests passing
+## Test Suite — 389 tests passing
 
-7. **Phase 4: PremiumCalculator.sol**
-   - Premium formula from PDF section 1.4.6:
-     P = max(V * [(Patt * L%) + (Tint * E/(1-E))/Vbase + Coracle24h/Vbase] * (1+M) * Fcov, Pmin * V)
-   - Three-component base rate: attack probability, fraud cost, oracle cost
-   - Solvency ratio with adaptive margin:
-     - SR >= 1.5x: mAdj = 0
-     - 1.3x <= SR < 1.5x: mAdj = 5% (deltaMmed)
-     - SR < 1.3x: mAdj = 10% (deltaMhigh)
-   - Coverage factors: Low=70%, Medium=90%, High=100%
-   - Minimum premium floor: 1.5% of swap value
-   - Market data updates (tint, vbase, coracle24h) by owner
-   - All parameters configurable (patt, lPercent, eFNR, mBase, pmin, fcov, SR thresholds)
-   - Integrated with MEVInsurance.sol: buyPolicy uses calculator when set
-   - 48 new tests (PremiumCalculator.test.js)
-   - Total: 181/181 tests passing
+| File | Tests | Coverage |
+|------|-------|----------|
+| `MEVToken.test.js` | 8 | Token basics |
+| `MockAMM.test.js` | 12 | AMM swaps |
+| `OracleRegistry.test.js` | 45 | Registration, staking, status |
+| `PremiumCalculator.test.js` | 38 | Premium tiers, patt updates |
+| `MEVInsurance.test.js` | 71 | Policy, swaps, claims, fraud scores |
+| `ClaimManager.test.js` | 89 | Commit-reveal, finalize, CAPTCHA, C13 gas refund |
+| `E2E.test.js` | 126 | Full lifecycle end-to-end |
 
-8. **Phase 5: TierSystem.sol**
-   - Tier upgrade requirements from PDF Table 8:
-     - Bronze -> Silver: 18 swaps, 30 days membership, avg fraud score < 52
-     - Silver -> Gold: 55 swaps, 60 days membership, avg fraud score < 35
-   - checkAndUpgrade(): automatic tier promotion when requirements met
-   - Platinum upgrade: requestPlatinum() with 20% stake + off-chain CAPTCHA verification
-   - Full Platinum flow: stake deposit -> owner verifyCaptcha -> finalizePlatinum
-   - Blacklist system: blacklistUser() adds 20% penalty debt on loss
-   - payDebt(): partial/full debt payment, auto un-blacklist when debt = 0
-   - Data sync from MEVInsurance (owner-triggered)
-   - View helpers: canUpgradeToSilver(), canUpgradeToGold(), getMaxDailySwaps()
-   - All parameters configurable by owner
-   - Integrated reference in MEVInsurance.sol
-   - 59 new tests (TierSystem.test.js) including full lifecycle test
-   - Total: 240/240 tests passing
+---
 
-9. **Phase 6: SlashingSystem.sol**
-   - Report submission: reporter deposits Creport = 0.014 ETH, jury of 7 selected
-   - Jury selection excludes accused oracle (requests nJury+1, filters accused)
-   - Commit-reveal jury voting: slash percentage 0-100%
-   - Finalization based on median vote:
-     - Median > 0: slash = stake * median / 100
-       - Jury reward deducted from slash
-       - Residual: 75% to pool, 25% to reporter
-       - Reporter deposit refunded
-       - Median > 50% (thetaExpulsion): oracle expelled permanently
-       - Median <= 50%: oracle slashed, can reintegrate
-     - Median = 0: reporter deposit confiscated, distributed as jury reward
-   - Pool management: accumulated slashing funds, owner withdrawable
-   - Commit/reveal timeouts (2 days each), partial reveal finalization
-   - All parameters configurable by owner
-   - 46 new tests (SlashingSystem.test.js)
-   - Total: 286/286 tests passing
+## Protocol Parameters
 
-10. **Phase 7: SandwichBot.sol + MockAMM.sol + MockUSDC.sol**
-   - SandwichBot: executeFrontrun/executeBackrun with profit tracking per attack
-   - MockAMM: constant product AMM (x*y=k) with addLiquidity, swap, getPrice, getAmountOut
-   - MockUSDC: simple ERC20 mock as quote token
-   - 29 new tests (SandwichBot.test.js)
-   - Total: 315/315 tests passing
+| Parameter | Value |
+|-----------|-------|
+| θ_approve | 60 (fraud score ≤ 60 → auto approve) |
+| θ_reject  | 80 (fraud score ≥ 80 → auto reject) |
+| Dispersion threshold | 20 (triggers secondary review) |
+| Gas refund amount | 0.01 MEVI per approved claim |
+| Oracle stake minimum | 1000 MEVI |
+| Policy duration | 30 days |
+| Coverage levels | Bronze / Silver / Gold / Platinum |
 
-11. **Phase 8: End-to-End Integration Test**
-   - Full lifecycle: sandwich attack → claim → oracle commit-reveal → CAPTCHA → payout
-   - Tier progression: Bronze → Silver → Gold → Platinum with requirements
-   - Oracle slashing: report → jury commit-reveal → expulsion (median > 50%)
-   - Premium calculator integration: dynamic premium on buyPolicy
-   - Claim rejection: high fraud → blacklist, invalid pattern detection
-   - CAPTCHA flow: Bronze users always get CAPTCHARequired → owner resolves
-   - Multi-user concurrent claims with different outcomes
-   - Oracle timeout handling with partial reveals
-   - Complete protocol smoke test (all contracts wired)
-   - 17 new tests (E2E.test.js)
-   - Total: 332/332 tests passing
-
-12. **Phase 9: PattUpdater.sol (Patt Update Mechanism)**
-   - Oracle-driven periodic update of Patt (probability of attack) in PremiumCalculator
-   - startPattUpdate(): selects Noracle_patt=5 oracles, starts commit phase
-   - Commit-reveal: oracles estimate attack ratio in basis points (0-10000)
-   - finalizePattUpdate(): median + safety margin ms (200 bps), writes to PremiumCalculator
-   - Rclaim (0.002 ETH) reward per oracle that revealed
-   - Update interval enforced (default 1 day)
-   - Support for partial reveals after timeout
-   - Cap at 10000 bps (100%)
-   - Sequential rounds supported
-   - PremiumCalculator ownership transferred to PattUpdater
-   - 46 new tests (PattUpdater.test.js)
-   - Total: 378/378 tests passing
-
-## Current Architecture
+### FraudScore Formula (PDF §1.3.11)
 
 ```
-contracts/
-  MEVToken.sol                  - ERC20 token (MEVI, 1M supply)
-  MEVInsurance.sol              - Insurance contract (Phase 3: full ClaimManager)
-  OracleRegistry.sol            - Oracle management (register, activate, select, slash)
-  PremiumCalculator.sol          - Dynamic premium calculation (PDF formula)
-  TierSystem.sol                 - User tier management (Bronze->Silver->Gold->Platinum)
-  SlashingSystem.sol             - Oracle slashing disputes with jury commit-reveal
-  SandwichBot.sol               - MEV sandwich attack simulator (frontrun/backrun)
-  MockAMM.sol                   - Constant product AMM (x*y=k) for simulation
-  MockUSDC.sol                  - ERC20 mock quote token
-  PattUpdater.sol               - Periodic Patt update via oracle consensus
-  libraries/
-    DataTypes.sol               - Shared enums and structs
-  test/
-    DataTypesConsumer.sol       - Test helper for DataTypes
+FraudScore = ScoreTier + ScoreClaimRate + ScoreNetwork + Variance
+
+ScoreTier:      Bronze=50, Silver=30, Gold=15, Platinum=0
+ScoreClaimRate: >30%→30, >20%→25, >10%→20, ≤10%→15, <6%→0
+ScoreNetwork:   random(0, 15)
+Variance:       random(-3, +3)
+Range:          [0, 130]
+```
+
+---
+
+## Corrections Applied
+
+### C1–C10 (earlier phase)
+Core contract logic: oracle commit-reveal pattern, tier promotion,
+policy expiry, daily swap limits, premium calculation, blacklisting.
+
+### C11 — selectOraclesExcluding
+- **File:** `contracts/OracleRegistry.sol`
+- Added `selectOraclesExcluding(seed, n, excludeList)` function
+- Used in `finalizeClaim()` secondary review path to pick a *different*
+  set of oracles from the first round (fixes "Already committed" error)
+
+### C12 — getPremiumEstimate
+- **File:** `contracts/MEVInsurance.sol`
+- Added `getPremiumEstimate(uint256 swapValue, CoverageLevel level) external view returns (uint256)`
+- Delegates to PremiumCalculator without requiring user address
+- Used by `STIMA` command in user_cli.py
+
+### C13 — Gas Refund on Claim Approval
+- **Files:** `contracts/libraries/DataTypes.sol`, `contracts/MEVInsurance.sol`,
+  `test/ClaimManager.test.js`, `test/E2E.test.js`
+- Added `submitGasUsed` field to `Claim` struct
+- Added `gasRefundAmount = 0.01 ether` state variable + `setGasRefundAmount()` setter
+- Added `GasRefundIssued` event
+- `submitClaim()`: measures gas via `gasleft()` before/after
+- `finalizeClaim()` / `resolveCAPTCHA()`: approved payout = `payout + gasRefundAmount`
+- All affected test assertions updated with `+ ethers.parseEther("0.01")`
+- 8 new tests added in ClaimManager.test.js
+
+---
+
+## Simulation Scripts
+
+### Architecture
+
+```
 scripts/
-  launch.py                     - Simulation orchestrator (single entry point)
-  deploy_all.js                 - Full deployment of all 10 contracts with wiring
-  deploy_token.js               - Deploy MEVToken only
-  dashboard.py                  - Formatted terminal output (tables, reports)
-  utils.py                      - Shared utilities (web3, tx, logging, network support)
-  actors/
-    __init__.py                 - Package init
-    trader_actor.py             - TraderActor class (register, policy, swap, claim)
-    oracle_actor.py             - OracleActor class (FraudScore analysis, commit-reveal)
-    bot_actor.py                - BotActor class (sandwich attacks, profit tracking)
-  trader.py                     - Standalone trader script (legacy)
-  mev_bot.py                    - Standalone bot script (legacy)
-  oracle.py                     - Standalone oracle script (legacy)
-  deploy_token.js               - Deploy MEVToken to network
-  deploy_all.js                 - Full deployment + wiring + funding (all 10 contracts)
-  utils.py                      - Shared Python utilities (web3, commit-reveal, helpers)
-  simulation.py                 - Sequential orchestrator (20-cycle end-to-end demo)
-  oracle.py                     - Standalone oracle node simulator
-  trader.py                     - Standalone trader simulator
-  mev_bot.py                    - MEV bot simulator (sandwich + direct)
-config/
-  deployed_addresses.json       - Auto-generated contract addresses from deploy_all.js
-test/
-  MEVToken.test.js              - Token unit tests (8 tests)
-  MEVInsurance.test.js          - Insurance legacy tests (9 tests)
-  ClaimManager.test.js          - ClaimManager full tests (72 tests)
-  DataTypes.test.js             - DataTypes unit tests (12 tests)
-  OracleRegistry.test.js        - Oracle registry tests (52 tests)
-  PremiumCalculator.test.js      - Premium calculator tests (49 tests)
-  TierSystem.test.js             - Tier system tests (59 tests)
-  SlashingSystem.test.js         - Slashing system tests (46 tests)
-  SandwichBot.test.js            - Sandwich attack + AMM tests (29 tests)
-  E2E.test.js                    - End-to-end integration tests (17 tests)
-  PattUpdater.test.js            - Patt update mechanism tests (46 tests)
-logs/
-  project_log.md                - This file
+  deploy_all.js       Deploys all 10 contracts, saves config/deployed_addresses.json
+  utils.py            Shared helpers (web3, logging, send_tx, advance_day, fraud score)
+  setup_chain.py      One-time init: register oracles, fund bot/user, save actors.json
+  user_cli.py         Interactive CLI — YOU are the trader
+  bot_daemon.py       Background bot polling for sandwich attacks
+  status.py           Live dashboard (pool, profile, oracles, recent claims)
+  advance_day.py      Advance blockchain time by N days
 ```
 
-## Tech Stack
+### Workflow
 
-- **Smart Contracts:** Solidity 0.8.20, OpenZeppelin ERC20 + Ownable + ReentrancyGuard
-- **Compiler:** viaIR enabled, optimizer 200 runs
-- **Framework:** Hardhat 2.28.6
-- **Python:** web3.py, eth-account
-- **Networks:** Hardhat local (chainId 31337), Sepolia (planned)
-
-## Last Changes
-
-- **Merged Corrections 2-6** from phase-3-import-fix branch
-- **Correction 7: Secondary review for high dispersion**
-  - finalizeClaim() now triggers secondary review when dispersione > threshold (20) on first evaluation
-  - Claim is reset with fresh oracles for a second round of commit-reveal
-  - Added `secondaryReview` flag to Claim struct, `SecondaryReviewTriggered` event
-- **Correction 11: Twatchlist = 90 days minimum observation**
-  - Watchlisted oracles must stay on watchlist for tWatchlist (90 days) before resetDeviationScore can restore them
-  - Active (non-watchlisted) oracles only need tReset (30 days) for score reset
-  - Added tWatchlist parameter + setTWatchlist() setter
-- **Correction 12: Dataset commitment in PattUpdater** — already implemented in merged branch
-  - commitPattEstimate uses keccak256(pattEstimate, datasetHash, salt)
-  - revealPattEstimate accepts datasetHash, stores in datasetHashes mapping
-- **Correction 9: MEV Bot Blacklist**
-  - submitClaim() now accepts botAddress parameter
-  - Tracks per-bot attackCount and totalDamage on approved claims
-  - Auto-blacklists bot when attackCount >= botBlacklistThreshold (default 3)
-  - Added botAttackCount, botTotalDamage, botBlacklisted mappings
-  - Added BotBlacklisted event
-- **Correction 10: Oracle Inactivity Penalty**
-  - finalizeClaim() now penalizes oracles that didn't reveal (after timeout)
-  - New penalizeInactivity() in OracleRegistry: deducts stake without changing status
-  - Configurable inactivityPenalty (default 0.001 ETH)
-  - Added OracleInactivityPenalized event
-  - Added setUserTier() owner function for testing tier-dependent logic
-- **Correction 8: Cumulative deviation score + watchlistStrikes**
-  - recordDeviation() now accepts `uint256 _absoluteDeviation` parameter
-  - deviationScore accumulates sum of absolute deviations (not just a counter)
-  - Added separate `watchlistStrikes` counter: incremented only when deviation >= deltaWatchlist
-  - Watchlist triggered by watchlistStrikes >= kWatchlist (not deviationScore)
-  - resetDeviationScore() now also resets watchlistStrikes
-  - Updated getOracleInfo() to return watchlistStrikes
-- Total: 375/375 tests passing
-- **Correction 13: Gas refund for approved claims + getPremiumEstimate**
-  - submitClaim() now measures gas used (submitGasUsed field in Claim struct)
-  - Configurable gasRefundAmount (default 0.01 MEVI) added to payout on claim approval
-  - Gas refund applied in both finalizeClaim() and resolveCAPTCHA()
-  - Added GasRefundIssued event, setGasRefundAmount() owner setter
-  - Added getPremiumEstimate(swapValue, coverageLevel) view function for premium preview before insuredSwap()
-  - 8 new tests (gas refund + premium estimate)
-- Total: 389/389 tests passing
-
-ALL 13 CORRECTIONS COMPLETE.
-
-## Simulation Framework (Python)
-
-13. **Simulation Framework — Complete Rewrite**
-    - Replaced placeholder scripts with full actor-based simulation architecture
-    - **scripts/utils.py**: Complete rewrite with localhost/Sepolia dual-network support
-      - Colored ANSI logging (TRADE=green, ATTACK=red, ORACLE=blue, POOL=yellow, ERROR=red bold)
-      - Nonce management with automatic retry on failure
-      - `from_wei()` handles negative values (for P&L display)
-      - `increase_time()` works on localhost, no-op with warning on Sepolia
-      - `send_tx()` signs with private key on Sepolia, sends directly on localhost
-      - Optional file logging via `set_log_file()`
-    - **scripts/actors/oracle_actor.py**: FraudScore follows PDF section 1.3.11 exactly
-      - ScoreTier: Bronze=50, Silver=30, Gold=15, Platinum=0
-      - ScoreClaimRate (0-30): >30%→30, >20%→25, >10%→20, ≥6%→15, <6%→0
-      - ScoreNetwork (0-50): simulated BFS distance with realistic probability distribution
-        - Real attack: 90% score=0, 8% score=5, 2% score=15
-        - Non-attack: 70% score=0, 20% score=5, 8% score=15, 2% score=30
-      - Per-oracle persistent bias (±3) + jitter (±2) → typical dispersione 3-6 (under threshold 20)
-      - Separate commit and reveal phases
-    - **scripts/actors/trader_actor.py**: Full trader lifecycle
-      - Auto-renews expired policies
-      - Handles "Daily swap limit reached" gracefully (skips, doesn't retry)
-      - Handles "Policy expired" by auto-renewing and retrying
-      - Stats tracking: swaps, claims, premiums, payouts
-    - **scripts/actors/bot_actor.py**: MEV sandwich attack execution
-      - Uses SandwichBot contract for on-chain frontrun/backrun
-      - Probabilistic attack decisions via `should_attack()`
-      - Profit estimation and tracking
-      - On-chain blacklist status monitoring
-    - **scripts/dashboard.py**: Box-drawing formatted terminal output
-      - Daily summaries (swaps, claims, premiums, payouts, P&L)
-      - Pool status dashboard (balance, P&L, protocol parameters)
-      - Trader table (tier, swaps, claims, avg fraud score, balance, blacklist)
-      - Oracle table (status, stake, claims evaluated, deviation score)
-      - Bot table (attacks, success rate, profit, blacklist status)
-      - Final report with comprehensive statistics
-    - **scripts/launch.py**: Single entry point orchestrator
-      - CLI arguments: --traders, --bots, --oracles, --days, --attack-rate, --claim-rate, etc.
-      - Day-by-day simulation loop with time advancement
-      - Full pipeline per swap: insuredSwap → bot attack → submitClaim → oracle commit-reveal → finalizeClaim → CAPTCHA resolution
-      - Automatic daily swap limit management via evm_increaseTime
-      - Weekly dashboard display (--dashboard flag)
-      - Never crashes: catches all exceptions, logs, continues
-      - Fraudulent claim simulation (10% of non-attack claims)
-    - **scripts/deploy_all.js**: Full deployment of all 10 contracts with wiring
-      - Deploys MEVToken, OracleRegistry, PremiumCalculator, MEVInsurance, TierSystem, SlashingSystem, MockUSDC, MockAMM, SandwichBot, PattUpdater
-      - Wires all contract references (setPremiumCalculator, setAuthorizedCaller, etc.)
-      - Funds pool with 500k MEVI, AMM with 100k+100k liquidity
-      - Saves addresses to config/deployed_addresses.json
-
-    Usage:
-    ```bash
-    # Terminal 1
-    npx hardhat node
-    # Terminal 2
-    npx hardhat run scripts/deploy_all.js --network localhost
-    # Terminal 3
-    python scripts/launch.py --traders 3 --bots 1 --oracles 7 --days 5
-    ```
-14. **CRITICO 1: RANDAO Randomness**
-   - Oracle selection seed already uses `block.prevrandao` (RANDAO beacon post-merge)
-   - Added clarifying comments: safe for simulation, production may use Chainlink VRF
-   - No code change needed, only documentation
-
-15. **CRITICO 2: Real Sandwich Pattern Verification**
-   - Added `getClaimDetails()` view function to MEVInsurance.sol
-     - Returns: user, txHash1-3, swapValue, loss, botAddress, secondaryReview
-     - Allows oracles to fetch full claim data for off-chain verification
-   - Rewrote `oracle.py` with real on-chain sandwich verification:
-     - Fetches all 3 tx via web3 `get_transaction()`
-     - 5-point verification: tx exist, same bot sender, same block, correct order, same pool
-     - Heuristic fallback for synthetic tx (simulation): bot address, loss ratio, attack history
-   - 389/389 tests still passing
-
-16. **Operational Scripts (Deploy + Python Simulation Suite)**
-   - **scripts/deploy_all.js** (174 lines): Full deployment pipeline
-     - Deploys all 10 contracts in correct dependency order
-     - Wiring: insurance↔calculator, insurance↔tierSystem, calculator↔pattUpdater, registry↔insurance, registry↔slashingSystem
-     - Sets tActivation=0 for local testing (no oracle activation delay)
-     - Funding: 500k MEVI to insurance pool, 100k+100k AMM liquidity, 10 ETH to registry, 5 ETH to slashingSystem
-     - Saves all addresses to config/deployed_addresses.json
-   - **scripts/utils.py** (100 lines): Shared Python utilities
-     - Web3 connection, ABI loading, contract instantiation
-     - Transaction helper: send_tx() with gas/nonce management
-     - Commit-reveal: keccak256_commit() and keccak256_patt_commit() replicating Solidity encodePacked
-     - Helpers: generate_salt(), to_wei(), from_wei(), increase_time(), log()
-   - **scripts/simulation.py** (417 lines): Sequential orchestrator
-     - 20-cycle end-to-end simulation: insuredSwap → submitClaim → oracle commit-reveal → finalize → handle outcome
-     - Setup: funds trader/bot, registers 7 oracles, registers trader, buys High coverage policy
-     - Oracle fraud analysis: tier-based scoring, claim rate analysis, per-oracle variance
-     - Handles secondary review (re-does oracle round with converging scores)
-     - Handles CAPTCHA resolution (80% auto-approve)
-     - Comprehensive stats tracking + final report
-   - **scripts/oracle.py** (~290 lines): Standalone oracle node simulator
-     - OracleNode class: register, analyze claims, commit-reveal cycle
-     - **Real sandwich pattern verification** (PDF §3.2):
-       - Fetches txHash1/2/3 via getClaimDetails() getter
-       - Verifies tx existence on-chain
-       - Checks frontrun+backrun same sender (bot)
-       - Checks same block, correct ordering (frontrun < victim < backrun)
-       - Checks same pool/contract
-       - Falls back to heuristic (bot address, loss ratio, history) for synthetic tx in simulation
-     - Fraud analysis: tier adjustment, claim rate scoring, loss amount analysis, per-oracle variance
-     - Poll mode: polls for new claims on interval, processes assigned ones
-     - CLI args: --oracle-idx (0-6), --cycles, --interval
-   - **scripts/trader.py** (193 lines): Standalone trader simulator
-     - Trader class: setup, execute insured swaps, detect MEV, submit claims
-     - Configurable claim rate, random swap values (50-500 MEVI)
-     - Sandwich detection simulation (35% chance)
-     - Session report with balance, profile, tier info
-     - CLI args: --swaps, --claim-rate
-   - **scripts/mev_bot.py** (213 lines): MEV bot simulator
-     - MEVBot class: sandwich attacks via SandwichBot contract, direct AMM swaps
-     - Funds bot account + SandwichBot contract with MEVI/USDC
-     - Tracks attack success/failure, profit, blacklist status
-     - Mixed mode: 60% sandwich, 40% direct
-     - CLI args: --attacks, --mode (sandwich/direct/mixed)
-
-## Next Tasks (Phases)
-
-1. ~~Phase 1: Data structures and types~~ DONE
-2. ~~Phase 2: OracleRegistry.sol~~ DONE
-3. ~~Phase 3: ClaimManager (refactor MEVInsurance.sol)~~ DONE
-4. ~~Phase 4: PremiumCalculator.sol~~ DONE
-5. ~~Phase 5: TierSystem.sol~~ DONE
-6. ~~Phase 6: SlashingSystem.sol~~ DONE
-7. ~~Phase 7: SandwichBot.sol + MockAMM.sol~~ DONE
-8. ~~Phase 8: End-to-end test~~ DONE
-9. ~~Phase 9: Patt update mechanism~~ DONE
-
-ALL 9 PHASES COMPLETE.
-
-## Corrections (PDF Alignment)
-
-1. ~~Correzione 1: Premium per-swap~~ DONE
-2. ~~Correzione 2: Coverage percentages (Low=50%, Medium=70%, High=100%)~~ DONE
-3. ~~Correzione 3: Separare Fcov (premium) da coverage% (rimborso)~~ DONE
-4. ~~Correzione 4: FraudScore range 0-130, θapprove=60, θreject=80~~ DONE
-5. ~~Correzione 5: Reward oracle in finalizeClaim~~ DONE
-6. ~~Correzione 6: Margine ms variabile nel PattUpdater~~ DONE
-7. ~~Correzione 7: Revisione secondaria per alta dispersione~~ DONE
-8. ~~Correzione 8: Score scostamento come somma cumulativa~~ DONE
-9. ~~Correzione 9: Blacklist bot MEV~~ DONE
-10. ~~Correzione 10: Penalità inattività oracle~~ DONE
-11. ~~Correzione 11: Twatchlist periodo minimo osservazione~~ DONE
-12. ~~Correzione 12: Dataset commitment nel PattUpdater~~ DONE (merged branch)
-13. ~~Correzione 13: Rimborso gas per claim approvati~~ DONE
-
-## How to Run
-
-### Prerequisites
-- Node.js installed
-- Python 3.10+ with web3.py 6+, eth-account
-
-### Compile Contracts
 ```bash
-npx hardhat compile
-```
-
-### Run Tests (389 passing)
-```bash
-npx hardhat test
-```
-
-### Run Full Simulation (localhost)
-```bash
-# Terminal 1: Start local Hardhat node
+# 1. Start Hardhat node
 npx hardhat node
 
-# Terminal 2: Deploy all 10 contracts
+# 2. Deploy contracts
 npx hardhat run scripts/deploy_all.js --network localhost
 
-# Terminal 3: Run simulation
-python scripts/launch.py --traders 3 --bots 1 --oracles 7 --days 5
+# 3. Initialize chain state (once)
+python scripts/setup_chain.py
 
-# With all options:
-python scripts/launch.py \
-  --network localhost \
-  --traders 5 \
-  --bots 2 \
-  --oracles 7 \
-  --days 30 \
-  --swap-interval 3 \
-  --attack-rate 0.15 \
-  --claim-rate 0.6 \
-  --log-file simulation.log \
-  --dashboard
+# 4. Optional: run background bot
+python scripts/bot_daemon.py --rate 0.25 &
+
+# 5. Play as trader
+python scripts/user_cli.py
 ```
 
-### Deploy Token Only (legacy)
-```bash
-npx hardhat run scripts/deploy_token.js --network localhost
-### Deploy All Contracts (local node)
-```bash
-# Terminal 1: Start local node
-npx hardhat node
+### CLI Commands (user_cli.py)
 
-# Terminal 2: Deploy all contracts
-npx hardhat run scripts/deploy_all.js --network localhost
-```
+| Command | Description |
+|---------|-------------|
+| `SWAP <amount>` | Execute insured swap, pay premium |
+| `CLAIM <swap_id> <loss>` | Submit claim; all 7 oracles vote automatically |
+| `STIMA <amount>` | Estimate premium before swapping |
+| `PROFILO` | Show your tier, balance, claims history |
+| `POOL` | Show pool balance and global stats |
+| `GIORNO [N]` | Advance blockchain by N days (default 1) |
+| `RINNOVA` | Buy/renew insurance policy |
+| `HELP` | List commands |
+| `ESCI` | Exit |
 
-### Run Full Simulation
-```bash
-# Terminal 1: npx hardhat node
-# Terminal 2: npx hardhat run scripts/deploy_all.js --network localhost
-# Terminal 3:
-python scripts/simulation.py          # 20-cycle orchestrated demo
-```
+### Account Allocation (Hardhat)
 
-### Run Individual Simulators
-```bash
-python scripts/trader.py --swaps 20 --claim-rate 0.6
-python scripts/oracle.py --oracle-idx 0 --cycles 50 --interval 2
-python scripts/mev_bot.py --attacks 10 --mode mixed
-```
+| Index | Role |
+|-------|------|
+| 0 | Deployer / owner |
+| 1 | User (trader — you) |
+| 6–12 | Oracles (7 total) |
+| 19 | MEV Bot |
 
-17. **Fix simulation.py: 3 problemi critici**
-   - **Problema A — Dispersione fraud score troppo alta**
-     - Prima: ogni oracle generava `claim_rate_score = random.randint(0,30)` + `network_score = random.randint(0,15)` + `±10` indipendentemente → dispersione fino a 55 >> soglia 20 → secondary review ad ogni ciclo → second round falliva silenziosamente
-     - Ora: `compute_claim_base_score()` calcola un punteggio BASE deterministico dal profilo on-chain (stesso per tutti gli oracle). `oracle_score()` aggiunge solo rumore `±5` per oracle → dispersione max = 10 < soglia 20
-   - **Problema B — Daily swap limit non si resettava**
-     - Il contratto usa `block.timestamp / 1 days` che in simulazione non avanzava mai
-     - Aggiunto `increase_time(w3, 86400)` alla fine di ogni giornata simulata
-   - **Problema C — Config interattiva + display formula**
-     - `interactive_config()`: chiede n_days, avg_swap, n_users, n_oracles, claim_prob
-     - `show_formula_params()`: legge e mostra tutti i parametri dal contratto (Patt, L%, eFNR, mBase, pmin, Fcov, SR thresholds, θApprove, θReject, dispersioneThreshold, maxDailySwaps, activationFee, minStake)
-     - Stima swap e claim prima di partire
-     - Multi-user: layout account pulito (users[1..N_USERS], oracle[N_USERS+1..], bot[N_USERS+N_ORA+1])
+---
+
+## Config Files
+
+| File | Description |
+|------|-------------|
+| `config/deployed_addresses.json` | Contract addresses after deploy |
+| `config/actors.json` | Oracle/bot/user addresses (written by setup_chain.py) |
+| `logs/simulation.log` | Plain-text dual log (also printed to stdout with ANSI color) |
