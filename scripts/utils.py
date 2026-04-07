@@ -88,6 +88,7 @@ def load_config() -> dict:
     with open(DEPLOYED_ADDRESSES_FILE) as f:
         return json.load(f)
 
+        time.sleep(RETRY_DELAY)
 
 def load_actors() -> dict:
     """Load actors.json (oracle/bot addresses). Returns {} if missing."""
@@ -123,13 +124,19 @@ def load_abi(contract_name: str) -> list:
 def get_contract(w3: Web3, name: str, address: str):
     """Return a web3 contract instance."""
     abi = load_abi(name)
-    return w3.eth.contract(address=Web3.to_checksum_address(address), abi=abi)
+
+    return w3.eth.contract(
+        address=Web3.to_checksum_address(address),
+        abi=abi
+    )
 
 
 def get_all_contracts(w3: Web3) -> dict:
     """Load all deployed contracts. Returns dict keyed by contract name."""
     cfg = load_config()
+
     contracts = {}
+
     for name, addr in cfg.items():
         try:
             contracts[name] = get_contract(w3, name, addr)
@@ -185,6 +192,7 @@ def send_tx(w3: Web3, fn, sender: str, value: int = 0,
 
     raise RuntimeError("send_tx: max retries exceeded")
 
+    return secrets.token_bytes(32)
 
 # ── Time Advancement ──
 
