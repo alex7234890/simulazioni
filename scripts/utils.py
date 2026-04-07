@@ -1,207 +1,128 @@
 """
 Shared utilities for MEV Insurance simulation scripts.
 
-Supports both localhost (Hardhat) and Sepolia testnet.
-Network-specific logic is contained entirely in this module.
+Provides: web3 connection, contract loading, transaction helpers,
+time advancement, dual logging (stdout + file), and commit-reveal helpers.
 """
-
 import json
 import os
+import sys
 import time
+import random
 import secrets
+from datetime import datetime
+from pathlib import Path
 
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
-# ─────────────────────────────────────────────
-# Constants
-# ─────────────────────────────────────────────
+# ── Paths ──
 
-MAX_RETRIES = 3
-GAS_LIMIT = 5_000_000
-RETRY_DELAY = 2
+ROOT = Path(__file__).parent.parent
+CONFIG_DIR = ROOT / "config"
+ARTIFACTS_DIR = ROOT / "artifacts" / "contracts"
+LOGS_DIR = ROOT / "logs"
+LOG_FILE = LOGS_DIR / "simulation.log"
 
-PROJECT_ROOT = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
-)
+DEPLOYED_ADDRESSES_FILE = CONFIG_DIR / "deployed_addresses.json"
+ACTORS_FILE = CONFIG_DIR / "actors.json"
 
-CONFIG_PATH = os.path.join(
-    PROJECT_ROOT,
-    "config",
-    "deployed_addresses.json"
-)
+LOGS_DIR.mkdir(exist_ok=True)
 
-ARTIFACTS_DIR = os.path.join(
-    PROJECT_ROOT,
-    "artifacts",
-    "contracts"
-)
+# ── ANSI Colors ──
 
-ENV_PATH = os.path.join(
-    PROJECT_ROOT,
-    ".env"
-)
-
-# ─────────────────────────────────────────────
-# Network Configuration
-# ─────────────────────────────────────────────
-
-NETWORKS = {
-    "localhost": {
-        "rpc": "http://127.0.0.1:8545",
-        "use_private_keys": False,
-    },
-    "sepolia": {
-        "rpc": "https://sepolia.infura.io/v3/{INFURA_KEY}",
-        "use_private_keys": True,
-    },
+_COLORS = {
+    "INFO":   "\033[37m",      # white
+    "USER":   "\033[96m",      # cyan
+    "BOT":    "\033[91m",      # red
+    "ORACLE": "\033[93m",      # yellow
+    "POOL":   "\033[92m",      # green
+    "CLAIM":  "\033[95m",      # magenta
+    "ERROR":  "\033[1;31m",    # bold red
+    "SYSTEM": "\033[1;34m",    # bold blue
+    "SETUP":  "\033[90m",      # dark grey
+    "TRADE":  "\033[96m",      # cyan
+    "ATTACK": "\033[91m",      # red
 }
-
-# ─────────────────────────────────────────────
-# Colors + Logging
-# ─────────────────────────────────────────────
+_RESET = "\033[0m"
 
 
-class Colors:
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-
-    WHITE = "\033[97m"
-    GREEN = "\033[92m"
-    RED = "\033[91m"
-    BLUE = "\033[94m"
-    YELLOW = "\033[93m"
-    CYAN = "\033[96m"
-    MAGENTA = "\033[95m"
-
-    RED_BOLD = "\033[1;91m"
-
-    LEVEL_MAP = {
-        "INFO": WHITE,
-        "TRADE": GREEN,
-        "ATTACK": RED,
-        "ORACLE": BLUE,
-        "CLAIM": CYAN,
-        "POOL": YELLOW,
-        "SETUP": MAGENTA,
-        "ERROR": RED_BOLD,
-        "TIME": YELLOW,
-        "DASH": WHITE + BOLD,
-    }
+def log(msg: str, tag: str = "INFO") -> None:
+    """Dual log: colored stdout + plain file."""
+    ts = datetime.now().strftime("%H:%M:%S")
+    color = _COLORS.get(tag.upper(), "")
+    print(f"{color}[{ts}][{tag:>6s}] {msg}{_RESET}")
+    with open(LOG_FILE, "a") as f:
+        f.write(f"[{ts}][{tag:>6s}] {msg}\n")
 
 
-_log_file = None
+# ── Web3 Connection ──
 
-
-def set_log_file(path):
-    global _log_file
-    _log_file = open(path, "a", encoding="utf-8")
-
-
-def close_log_file():
-    global _log_file
-    if _log_file:
-        _log_file.close()
-        _log_file = None
-
-
-def log(message, level="INFO"):
-    ts = time.strftime("%H:%M:%S")
-
-    color = Colors.LEVEL_MAP.get(
-        level,
-        Colors.WHITE
-    )
-
-    tag = f"[{level:>6s}]"
-
-    line = f"[{ts}] {tag} {message}"
-
-    print(f"{color}{line}{Colors.RESET}")
-
-    if _log_file:
-        _log_file.write(line + "\n")
-        _log_file.flush()
-
-
-# ─────────────────────────────────────────────
-# Web3 Connection
-# ─────────────────────────────────────────────
-
-
-def get_web3(network="localhost"):
-
-    cfg = NETWORKS.get(network)
-
-    if not cfg:
-        raise ValueError(
-            f"Unknown network: {network}"
-        )
-
-    rpc_url = cfg["rpc"]
-
-    if network == "sepolia":
-        infura = os.environ.get(
-            "INFURA_KEY",
-            ""
-        )
-        rpc_url = rpc_url.replace(
-            "{INFURA_KEY}",
-            infura
-        )
-
-    for attempt in range(MAX_RETRIES):
-
+def get_web3(retries: int = 5) -> Web3:
+    """Connect to localhost Hardhat node with retry."""
+    url = "http://127.0.0.1:8545"
+    for attempt in range(retries):
         try:
-
-            w3 = Web3(
-                Web3.HTTPProvider(
-                    rpc_url,
-                    request_kwargs={"timeout": 30}
-                )
-            )
-
+            w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 10}))
+            w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             if w3.is_connected():
+                log(f"Connected to {url} (chainId={w3.eth.chain_id})", "SYSTEM")
                 return w3
+        except Exception:
+            pass
+        delay = 2 ** attempt
+        log(f"Connection failed, retrying in {delay}s…", "SYSTEM")
+        time.sleep(delay)
+    raise ConnectionError(f"Cannot connect to Hardhat node at {url}")
 
-        except Exception as e:
 
-            log(
-                f"Connection attempt {attempt+1} failed: {e}",
-                "ERROR"
-            )
+# ── Config / Actors ──
+
+def load_config() -> dict:
+    """Load deployed contract addresses."""
+    if not DEPLOYED_ADDRESSES_FILE.exists():
+        raise FileNotFoundError(
+            "deployed_addresses.json not found.\n"
+            "Run: npx hardhat run scripts/deploy_all.js --network localhost"
+        )
+    with open(DEPLOYED_ADDRESSES_FILE) as f:
+        return json.load(f)
 
         time.sleep(RETRY_DELAY)
 
-    raise ConnectionError(
-        f"Cannot connect to {rpc_url}"
-    )
-
-
-# ─────────────────────────────────────────────
-# Contract Loading
-# ─────────────────────────────────────────────
-
-
-def load_config():
-
-    with open(CONFIG_PATH) as f:
+def load_actors() -> dict:
+    """Load actors.json (oracle/bot addresses). Returns {} if missing."""
+    if not ACTORS_FILE.exists():
+        return {}
+    with open(ACTORS_FILE) as f:
         return json.load(f)
 
 
-def load_abi(contract_name):
+def save_actors(data: dict) -> None:
+    """Persist actors.json."""
+    CONFIG_DIR.mkdir(exist_ok=True)
+    with open(ACTORS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    log(f"Saved actors.json ({len(data)} entries)", "SYSTEM")
 
-    abi_path = os.path.join(
-        ARTIFACTS_DIR,
-        f"{contract_name}.sol",
-        f"{contract_name}.json"
-    )
 
-    with open(abi_path) as f:
+# ── ABI / Contract Loading ──
+
+def load_abi(contract_name: str) -> list:
+    """Load ABI from Hardhat artifacts."""
+    candidates = list(ARTIFACTS_DIR.rglob(f"{contract_name}.json"))
+    candidates = [p for p in candidates if not p.name.endswith(".dbg.json")]
+    if not candidates:
+        raise FileNotFoundError(
+            f"ABI not found for '{contract_name}' in {ARTIFACTS_DIR}\n"
+            "Run: npx hardhat compile"
+        )
+    with open(candidates[0]) as f:
         return json.load(f)["abi"]
 
 
-def get_contract(w3, name, address):
-
+def get_contract(w3: Web3, name: str, address: str):
+    """Return a web3 contract instance."""
     abi = load_abi(name)
 
     return w3.eth.contract(
@@ -210,234 +131,141 @@ def get_contract(w3, name, address):
     )
 
 
-def get_all_contracts(w3):
-
+def get_all_contracts(w3: Web3) -> dict:
+    """Load all deployed contracts. Returns dict keyed by contract name."""
     cfg = load_config()
 
     contracts = {}
 
     for name, addr in cfg.items():
-
-        contracts[name] = get_contract(
-            w3,
-            name,
-            addr
-        )
-
+        try:
+            contracts[name] = get_contract(w3, name, addr)
+        except FileNotFoundError:
+            log(f"ABI missing for {name} — skipping", "SYSTEM")
     return contracts
 
 
-# ─────────────────────────────────────────────
-# Accounts
-# ─────────────────────────────────────────────
+# ── Transaction Helper ──
+
+# Per-address nonce cache
+_nonce_cache: dict = {}
 
 
-def _load_env():
+def send_tx(w3: Web3, fn, sender: str, value: int = 0,
+            gas: int = 500_000, retries: int = 3) -> dict:
+    """
+    Build and send a transaction using Hardhat's unlocked accounts.
+    Returns the transaction receipt.
+    """
+    sender = Web3.to_checksum_address(sender)
 
-    if os.path.exists(ENV_PATH):
+    if sender not in _nonce_cache:
+        _nonce_cache[sender] = w3.eth.get_transaction_count(sender)
+    nonce = _nonce_cache[sender]
 
-        with open(ENV_PATH) as f:
+    tx_params = {
+        "from": sender,
+        "nonce": nonce,
+        "gas": gas,
+        "value": value,
+    }
 
-            for line in f:
-
-                line = line.strip()
-
-                if (
-                    line
-                    and not line.startswith("#")
-                    and "=" in line
-                ):
-
-                    k, v = line.split("=", 1)
-
-                    os.environ.setdefault(
-                        k.strip(),
-                        v.strip()
-                    )
-
-
-def get_account(
-    w3,
-    index,
-    network="localhost"
-):
-
-    if network == "localhost":
-
-        addr = w3.eth.accounts[index]
-
-        return addr, None
-
-    else:
-
-        _load_env()
-
-        key = os.environ.get(
-            f"PRIVATE_KEY_{index}"
-        )
-
-        if not key:
-            raise ValueError(
-                f"Missing PRIVATE_KEY_{index}"
-            )
-
-        acct = w3.eth.account.from_key(key)
-
-        return acct.address, key
-
-
-# ─────────────────────────────────────────────
-# Transactions
-# ─────────────────────────────────────────────
-
-
-def send_tx(
-    w3,
-    fn,
-    sender,
-    value=0,
-    network="localhost",
-    private_key=None
-):
-
-    for attempt in range(MAX_RETRIES):
-
+    for attempt in range(retries):
         try:
-
-            nonce = w3.eth.get_transaction_count(
-                sender
-            )
-
-            tx = fn.build_transaction({
-                "from": sender,
-                "value": value,
-                "gas": GAS_LIMIT,
-                "gasPrice": w3.eth.gas_price,
-                "nonce": nonce,
-            })
-
-            if network == "localhost":
-
-                tx_hash = w3.eth.send_transaction(tx)
-
-            else:
-
-                signed = w3.eth.account.sign_transaction(
-                    tx,
-                    private_key
-                )
-
-                tx_hash = w3.eth.send_raw_transaction(
-                    signed.raw_transaction
-                )
-
-            receipt = w3.eth.wait_for_transaction_receipt(
-                tx_hash,
-                timeout=120
-            )
-
-            if receipt.status == 0:
-                raise Exception(
-                    "Transaction reverted"
-                )
-
+            tx_hash = fn.transact(tx_params)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+            if receipt["status"] == 0:
+                raise RuntimeError("Transaction reverted (status=0)")
+            _nonce_cache[sender] = nonce + 1
             return receipt
-
         except Exception as e:
-
-            if attempt < MAX_RETRIES - 1:
-
-                log(
-                    f"TX retry {attempt+1}: {e}",
-                    "ERROR"
-                )
-
-                time.sleep(RETRY_DELAY)
-
-            else:
+            err = str(e)
+            if "nonce too low" in err or "already known" in err:
+                _nonce_cache[sender] = w3.eth.get_transaction_count(sender)
+                nonce = _nonce_cache[sender]
+                tx_params["nonce"] = nonce
+            elif "revert" in err.lower() or "require" in err.lower():
                 raise
+            elif attempt == retries - 1:
+                raise
+            time.sleep(1.5 ** attempt)
 
-
-# ─────────────────────────────────────────────
-# Crypto Helpers
-# ─────────────────────────────────────────────
-
-
-def generate_salt():
+    raise RuntimeError("send_tx: max retries exceeded")
 
     return secrets.token_bytes(32)
 
+# ── Time Advancement ──
 
-def keccak256_commit(
-    fraud_score,
-    pattern_valid,
-    salt
-):
-
-    return Web3.solidity_keccak(
-        ["uint8", "bool", "bytes32"],
-        [fraud_score, pattern_valid, salt]
-    )
+def advance_day(w3: Web3, days: int = 1) -> None:
+    """Advance blockchain time by N days and mine a block."""
+    seconds = 86_400 * days
+    w3.provider.make_request("evm_increaseTime", [seconds])
+    w3.provider.make_request("evm_mine", [])
+    log(f"Advanced blockchain by {days} day(s) ({seconds}s)", "SYSTEM")
 
 
-# ─────────────────────────────────────────────
-# Units
-# ─────────────────────────────────────────────
+# ── Unit Conversion ──
+
+def to_wei(n) -> int:
+    """Convert MEVI (float/int) to wei."""
+    return int(float(n) * 10 ** 18)
 
 
-def to_wei(amount):
-
-    return Web3.to_wei(
-        amount,
-        "ether"
-    )
-
-
-def from_wei_safe(amount):
-
-    if amount < 0:
-
-        return -float(
-            Web3.from_wei(
-                abs(amount),
-                "ether"
-            )
-        )
-
-    return float(
-        Web3.from_wei(
-            amount,
-            "ether"
-        )
-    )
+def from_wei(n) -> float:
+    """Convert wei to MEVI. Handles negative values."""
+    if n < 0:
+        return -(abs(n) / 10 ** 18)
+    return float(n) / 10 ** 18
 
 
-# ─────────────────────────────────────────────
-# Time Manipulation
-# ─────────────────────────────────────────────
+# ── Commit-Reveal ──
+
+def generate_salt() -> int:
+    """Generate a random 256-bit salt."""
+    return random.randint(0, 2**256 - 1)
 
 
-def increase_time(
-    w3,
-    seconds,
-    network="localhost"
-):
+def keccak256_commit(fraud_score: int, pattern_valid: bool, salt: int) -> bytes:
+    """
+    Compute commit hash matching Solidity:
+    keccak256(abi.encodePacked(uint256, bool, uint256))
+    """
+    from eth_abi import encode
+    encoded = encode(["uint256", "bool", "uint256"], [fraud_score, pattern_valid, salt])
+    return Web3.keccak(encoded)
 
-    if network != "localhost":
 
-        log(
-            "Testnet: cannot manipulate time",
-            "TIME"
-        )
+# ── FraudScore Calculation (PDF §1.3.11) ──
 
-        return
+def compute_fraud_score(tier_id: int, total_claims: int, total_swaps: int) -> tuple:
+    """
+    Compute FraudScore = ScoreTier + ScoreClaimRate + ScoreNetwork + variance.
+    Returns (fraud_score: int, pattern_valid: bool).
 
-    w3.provider.make_request(
-        "evm_increaseTime",
-        [seconds]
-    )
+    ScoreTier:      Bronze=50, Silver=30, Gold=15, Platinum=0
+    ScoreClaimRate: >30%→30, >20%→25, >10%→20, ≤10%→15, <6%→0
+    ScoreNetwork:   random(0, 15)
+    Variance:       random(-3, +3)
+    """
+    score_tier = [50, 30, 15, 0][min(tier_id, 3)]
 
-    w3.provider.make_request(
-        "evm_mine",
-        []
-    )
+    claim_rate = (total_claims / total_swaps) if total_swaps > 0 else 0.0
+
+    if claim_rate > 0.30:
+        score_claim = 30
+    elif claim_rate > 0.20:
+        score_claim = 25
+    elif claim_rate > 0.10:
+        score_claim = 20
+    else:
+        score_claim = 15
+    if claim_rate < 0.06:
+        score_claim = 0
+
+    score_network = random.randint(0, 15)
+    variance = random.randint(-3, 3)
+
+    fraud_score = max(0, min(130, score_tier + score_claim + score_network + variance))
+    pattern_valid = random.random() < 0.7  # 70% chance of valid pattern for real attacks
+
+    return fraud_score, pattern_valid
