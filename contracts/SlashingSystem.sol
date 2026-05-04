@@ -6,67 +6,23 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./libraries/DataTypes.sol";
 import "./OracleRegistry.sol";
 
-/**
- * @title SlashingSystem
- * @dev Handles slashing disputes against oracles via a jury-based commit-reveal process.
- *
- * Flow:
- *   1. Reporter submits report against an oracle, depositing Creport = Rclaim * Njury
- *   2. Jury of 7 oracles selected pseudo-randomly (excludes watchlisted)
- *   3. Jury members commit-reveal a slash percentage (0-100%)
- *   4. Finalization based on median vote:
- *      - Median > 0: slash = stake * median / 100
- *        - Jury reward deducted from slash
- *        - Residual: 75% to pool, 25% to reporter
- *        - Reporter deposit refunded
- *        - If median > thetaExpulsion (50%): oracle expelled permanently
- *        - If median <= 50%: oracle slashed, may reintegrate
- *      - Median = 0: reporter deposit confiscated, distributed as jury reward
- *
- * All percentages in basis points (10000 = 100%).
- */
 contract SlashingSystem is Ownable, ReentrancyGuard {
-
-    // -------------------------------------------------------
-    //  External contracts
-    // -------------------------------------------------------
 
     OracleRegistry public oracleRegistry;
 
-    // -------------------------------------------------------
-    //  Protocol Parameters
-    // -------------------------------------------------------
-
-    /// @dev Number of jury members per dispute
     uint256 public nJury = 7;
-
-    /// @dev Report deposit = rClaim * nJury (default: 0.002 * 7 = 0.014 ETH)
     uint256 public reportDeposit = 0.014 ether;
-
-    /// @dev Reward per jury member (matches rClaim from OracleRegistry)
     uint256 public juryReward = 0.002 ether;
-
-    /// @dev Threshold for permanent expulsion (50% median -> expelled)
     uint256 public thetaExpulsion = 50;
-
-    /// @dev Pool share of residual slash (in basis points, 7500 = 75%)
     uint256 public poolShareBps = 7500;
-
-    /// @dev Commit timeout for jury votes
     uint256 public juryCommitTimeout = 2 days;
-
-    /// @dev Reveal timeout for jury votes
     uint256 public juryRevealTimeout = 2 days;
 
-    // -------------------------------------------------------
-    //  Data Structures
-    // -------------------------------------------------------
-
     enum ReportStatus {
-        Pending,      // Awaiting jury votes
-        Slashed,      // Oracle was slashed
-        Expelled,     // Oracle was expelled
-        Dismissed     // Report dismissed (median = 0)
+        Pending,
+        Slashed,
+        Expelled,
+        Dismissed
     }
 
     struct Report {
@@ -78,29 +34,18 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         address[] jury;
         uint256 commitCount;
         uint256 revealCount;
-        uint8[] revealedVotes;   // Slash percentages (0-100)
+        uint8[] revealedVotes;
         uint256 timestamp;
     }
 
-    /// @dev All reports
     Report[] public reports;
-
-    /// @dev Jury commit hashes: reportId => juror => commitHash
     mapping(uint256 => mapping(address => bytes32)) public juryCommits;
-
-    /// @dev Whether juror has revealed: reportId => juror => bool
     mapping(uint256 => mapping(address => bool)) public juryHasRevealed;
-
-    /// @dev Whether juror has committed: reportId => juror => bool
     mapping(uint256 => mapping(address => bool)) public juryHasCommitted;
+    uint256 public totalSlashedToPoolCumulative;
+    address public mevInsurance;
 
-    /// @dev Accumulated pool funds from slashing
-    uint256 public poolBalance;
-
-    // -------------------------------------------------------
-    //  Events
-    // -------------------------------------------------------
-
+    event MEVInsuranceSet(address indexed addr);
     event ReportSubmitted(uint256 indexed reportId, address indexed reporter,
                           address indexed accusedOracle, uint256 deposit);
     event JurySelected(uint256 indexed reportId, address[] jury);
@@ -110,31 +55,21 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
                             uint256 medianPercent, uint256 slashAmount);
     event ReportDismissed(uint256 indexed reportId);
     event PoolFunded(uint256 amount);
-    event PoolWithdrawn(address indexed to, uint256 amount);
     event ParameterUpdated(string param, uint256 value);
-
-    // -------------------------------------------------------
-    //  Constructor
-    // -------------------------------------------------------
 
     constructor(address _oracleRegistry) Ownable(msg.sender) {
         oracleRegistry = OracleRegistry(payable(_oracleRegistry));
     }
 
-    // -------------------------------------------------------
-    //  Report Submission
-    // -------------------------------------------------------
+    function setMEVInsurance(address _addr) external onlyOwner {
+        require(_addr != address(0), "Zero address");
+        mevInsurance = _addr;
+        emit MEVInsuranceSet(_addr);
+    }
 
-    /**
-     * @dev Submit a slashing report against an oracle.
-     * Reporter must deposit reportDeposit ETH.
-     * @param _accusedOracle The oracle to report
-     * @param _proofs Arbitrary proof data (e.g., tx hashes, evidence)
-     */
     function submitReport(address _accusedOracle, bytes calldata _proofs) external payable nonReentrant {
         require(msg.value >= reportDeposit, "Insufficient report deposit");
 
-        // Verify accused oracle is active or watchlisted
         (uint256 stake, DataTypes.OracleStatus oStatus,,,,,) = oracleRegistry.getOracleInfo(_accusedOracle);
         require(
             oStatus == DataTypes.OracleStatus.Active ||
@@ -143,20 +78,16 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         );
         require(stake > 0, "Oracle has no stake");
 
-        // Select jury (excludes watchlisted). We request extra oracles
-        // in case the accused is among them, then filter the accused out.
+        // Request nJury+2 candidates so after filtering the accused we still have nJury
         uint256 seed = uint256(keccak256(abi.encodePacked(
             block.timestamp, block.prevrandao, msg.sender, reports.length
         )));
-        // Request nJury + 1 to have room to exclude the accused
-        uint256 requestCount = nJury + 1;
-        address[] memory candidates = oracleRegistry.selectOracles(seed, requestCount);
+        address[] memory candidates = oracleRegistry.selectOracles(seed, nJury + 2);
 
-        // Filter out accused
         address[] memory selectedJury = new address[](nJury);
         uint256 picked = 0;
         for (uint256 i = 0; i < candidates.length && picked < nJury; i++) {
-            if (candidates[i] != _accusedOracle) {
+            if (candidates[i] != _accusedOracle && candidates[i] != msg.sender) {
                 selectedJury[picked] = candidates[i];
                 picked++;
             }
@@ -181,20 +112,9 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         emit JurySelected(reportId, selectedJury);
     }
 
-    // -------------------------------------------------------
-    //  Jury Commit-Reveal
-    // -------------------------------------------------------
-
-    /**
-     * @dev Jury member commits their vote hash.
-     * commitHash = keccak256(abi.encodePacked(slashPercent, salt))
-     * @param _reportId The report ID
-     * @param _commitHash Hash of the vote
-     */
     function commitJuryVote(uint256 _reportId, bytes32 _commitHash) external {
         require(_reportId < reports.length, "Invalid report ID");
         Report storage r = reports[_reportId];
-
         require(r.status == ReportStatus.Pending, "Report not pending");
         require(_isJuror(_reportId, msg.sender), "Not a juror");
         require(!juryHasCommitted[_reportId][msg.sender], "Already committed");
@@ -207,20 +127,12 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         juryCommits[_reportId][msg.sender] = _commitHash;
         juryHasCommitted[_reportId][msg.sender] = true;
         r.commitCount++;
-
         emit JuryVoteCommitted(_reportId, msg.sender);
     }
 
-    /**
-     * @dev Jury member reveals their vote.
-     * @param _reportId The report ID
-     * @param _slashPercent Slash percentage (0-100)
-     * @param _salt Salt used in commit
-     */
     function revealJuryVote(uint256 _reportId, uint8 _slashPercent, bytes32 _salt) external {
         require(_reportId < reports.length, "Invalid report ID");
         Report storage r = reports[_reportId];
-
         require(r.status == ReportStatus.Pending, "Report not pending");
         require(_isJuror(_reportId, msg.sender), "Not a juror");
         require(juryHasCommitted[_reportId][msg.sender], "Not committed");
@@ -231,36 +143,15 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
             "Reveal period expired"
         );
 
-        // Verify commit hash
         bytes32 expectedHash = keccak256(abi.encodePacked(_slashPercent, _salt));
         require(juryCommits[_reportId][msg.sender] == expectedHash, "Hash mismatch");
 
         juryHasRevealed[_reportId][msg.sender] = true;
         r.revealedVotes.push(_slashPercent);
         r.revealCount++;
-
         emit JuryVoteRevealed(_reportId, msg.sender, _slashPercent);
     }
 
-    // -------------------------------------------------------
-    //  Finalization
-    // -------------------------------------------------------
-
-    /**
-     * @dev Finalize a slashing report after jury reveals (or timeout).
-     *
-     * If median > 0:
-     *   - slash = oracleStake * median / 100
-     *   - Deduct juryReward * nJury from slash amount
-     *   - Residual: 75% to pool, 25% to reporter
-     *   - Refund reporter deposit
-     *   - If median > thetaExpulsion: oracle expelled
-     *   - Else: oracle slashed, can reintegrate
-     *
-     * If median = 0:
-     *   - Confiscate reporter deposit
-     *   - Distribute deposit as jury reward
-     */
     function finalizeSlashing(uint256 _reportId) external nonReentrant {
         require(_reportId < reports.length, "Invalid report ID");
         Report storage r = reports[_reportId];
@@ -274,26 +165,22 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         uint256 median = _calculateMedian(r.revealedVotes);
 
         if (median > 0) {
-            // Oracle gets slashed
             (uint256 oracleStake,,,,,,) = oracleRegistry.getOracleInfo(r.accusedOracle);
             uint256 slashAmount = (oracleStake * median) / 100;
 
-            // Slash the oracle in the registry
-            oracleRegistry.slashOracle(r.accusedOracle, slashAmount);
+            oracleRegistry.slashOracle(r.accusedOracle, slashAmount, address(this));
 
-            // Calculate distributions
             uint256 totalJuryReward = juryReward * r.revealCount;
             uint256 residual = 0;
             if (slashAmount > totalJuryReward) {
                 residual = slashAmount - totalJuryReward;
             } else {
-                totalJuryReward = slashAmount; // Cap jury reward at slash amount
+                totalJuryReward = slashAmount;
             }
 
-            uint256 poolShare = (residual * poolShareBps) / 10000;
-            uint256 reporterShare = residual - poolShare;
+            uint256 reporterShare = (residual * 2500) / 10000;
+            uint256 poolShare = residual - reporterShare;
 
-            // Effects
             if (median > thetaExpulsion) {
                 r.status = ReportStatus.Expelled;
                 oracleRegistry.expelOracle(r.accusedOracle);
@@ -301,34 +188,30 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
                 r.status = ReportStatus.Slashed;
             }
 
-            poolBalance += poolShare;
+            totalSlashedToPoolCumulative += poolShare;
 
-            // Interactions: pay reporter (share + deposit refund)
-            uint256 reporterTotal = reporterShare + r.deposit;
+            uint256 reporterTotal = r.deposit + reporterShare;
             if (reporterTotal > 0) {
-                (bool sent1, ) = r.reporter.call{value: reporterTotal}("");
-                require(sent1, "Reporter payment failed");
+                (bool sentRep, ) = r.reporter.call{value: reporterTotal}("");
+                require(sentRep, "Reporter payment failed");
             }
 
-            // Pay jury rewards
             _distributeJuryRewards(_reportId, totalJuryReward);
+
+            if (poolShare > 0) {
+                require(mevInsurance != address(0), "MEVInsurance not set");
+                (bool sentPool, ) = mevInsurance.call{value: poolShare}("");
+                require(sentPool, "Pool transfer failed");
+            }
 
             emit SlashingFinalized(_reportId, r.status, median, slashAmount);
         } else {
-            // Median = 0: dismiss report, confiscate deposit
             r.status = ReportStatus.Dismissed;
-
-            // Distribute confiscated deposit as jury reward
             _distributeJuryRewards(_reportId, r.deposit);
-
             emit ReportDismissed(_reportId);
             emit SlashingFinalized(_reportId, ReportStatus.Dismissed, 0, 0);
         }
     }
-
-    // -------------------------------------------------------
-    //  Internal Helpers
-    // -------------------------------------------------------
 
     function _isJuror(uint256 _reportId, address _juror) internal view returns (bool) {
         address[] storage jury = reports[_reportId].jury;
@@ -338,9 +221,6 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         return false;
     }
 
-    /**
-     * @dev Distribute rewards equally among revealed jurors.
-     */
     function _distributeJuryRewards(uint256 _reportId, uint256 _totalReward) internal {
         Report storage r = reports[_reportId];
         if (r.revealCount == 0 || _totalReward == 0) return;
@@ -351,17 +231,15 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < r.jury.length; i++) {
             if (juryHasRevealed[_reportId][r.jury[i]]) {
                 (bool sent, ) = r.jury[i].call{value: perJuror}("");
-                // Silently skip if transfer fails (juror contract that rejects ETH)
-                if (!sent) {
-                    poolBalance += perJuror;
+                // Fallback: forward to pool if juror rejects ETH
+                if (!sent && mevInsurance != address(0)) {
+                    (bool fwd, ) = mevInsurance.call{value: perJuror}("");
+                    if (fwd) totalSlashedToPoolCumulative += perJuror;
                 }
             }
         }
     }
 
-    /**
-     * @dev Calculate median of a uint8 array (insertion sort).
-     */
     function _calculateMedian(uint8[] storage _votes) internal view returns (uint256) {
         uint256 len = _votes.length;
         if (len == 0) return 0;
@@ -389,10 +267,6 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         }
     }
 
-    // -------------------------------------------------------
-    //  View Functions
-    // -------------------------------------------------------
-
     function getReportsCount() external view returns (uint256) {
         return reports.length;
     }
@@ -418,27 +292,6 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
     function getReportVotes(uint256 _reportId) external view returns (uint8[] memory) {
         return reports[_reportId].revealedVotes;
     }
-
-    // -------------------------------------------------------
-    //  Pool Management
-    // -------------------------------------------------------
-
-    /**
-     * @dev Withdraw pool funds to a recipient. Owner only.
-     */
-    function withdrawPool(address _to, uint256 _amount) external onlyOwner nonReentrant {
-        require(_amount <= poolBalance, "Exceeds pool balance");
-        poolBalance -= _amount;
-
-        (bool sent, ) = _to.call{value: _amount}("");
-        require(sent, "Withdrawal failed");
-
-        emit PoolWithdrawn(_to, _amount);
-    }
-
-    // -------------------------------------------------------
-    //  Parameter Setters (owner only)
-    // -------------------------------------------------------
 
     function setNJury(uint256 _val) external onlyOwner {
         nJury = _val;
@@ -476,7 +329,6 @@ contract SlashingSystem is Ownable, ReentrancyGuard {
         emit ParameterUpdated("juryRevealTimeout", _val);
     }
 
-    /// @dev Allow contract to receive ETH
     receive() external payable {
         emit PoolFunded(msg.value);
     }

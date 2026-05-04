@@ -1,0 +1,657 @@
+════════════════════════════════════════════════════════════════════════
+  MEV INSURANCE — MAPPA AZIONI → FUNZIONI SOLIDITY
+  (ogni azione del sistema con la funzione che la esegue on-chain)
+════════════════════════════════════════════════════════════════════════
+
+Legenda colonne:
+  AZIONE          = cosa succede nel sistema
+  CHI LA CHIAMA   = quale script Python invoca la funzione
+  FUNZIONE SOL    = funzione Solidity (contratto, riga)
+  EVENTO EMESSO   = evento on-chain emesso (letto poi dal monitor)
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 1 — REGISTRAZIONE E SETUP ATTORI
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Trader si registra (prima volta)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : trader.py → ins.functions.insuredSwap(...)
+  FUNZIONE SOL  : MEVInsurance.sol riga 342
+                  registerUser() — chiamata interna automatica
+                  dentro insuredSwap() se non ancora registrato
+  COSA FA       : setta registeredUsers[msg.sender] = true
+                  assegna tier iniziale (Bronze di default)
+  EVENTO        : UserRegistered(address user)
+
+  AZIONE: Oracle si registra (deposita stake ETH)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → oreg.functions.registerOracle()
+  FUNZIONE SOL  : OracleRegistry.sol riga 125
+                  registerOracle() external payable
+  COSA FA       : verifica che msg.value >= getMinimumStake()
+                  Stake minimo scala: baseStake * log2(1 + n_oracle_attivi)
+                  Salva OracleInfo con status = Pending
+                  Blocca ETH nel contratto come stake
+  EVENTO        : OracleRegistered(address oracle, uint256 stake)
+
+  AZIONE: Oracle si attiva (diventa eleggibile per i claim)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → oreg.functions.activateOracle()
+  FUNZIONE SOL  : OracleRegistry.sol riga 155
+                  activateOracle() external
+  COSA FA       : verifica che siano trascorsi tActivation (7 giorni)
+                  (in simulazione il tempo viene saltato con evm_mine)
+                  porta lo status da Pending → Active
+                  incrementa activeOracleCount
+  EVENTO        : OracleActivated(address oracle)
+
+  AZIONE: Finanziare trader/bot con USDC e MEVI
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : orchestrator.py → setup_trader_on_chain()
+  FUNZIONE SOL  : MEVToken.sol / MockUSDC.sol
+                  transfer(address to, uint256 amount)
+                  approve(address spender, uint256 amount)
+  COSA FA       : invia token dal deployer al trader/bot
+                  approva MEVInsurance e MockAMM a spendere i token
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 2 — SWAP ASSICURATO (il trader si protegge)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Calcolo preventivo premio prima di pagare
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : trader.py → ins.functions.getPremiumEstimate(val, liv)
+  FUNZIONE SOL  : MEVInsurance.sol riga 1226
+                  getPremiumEstimate(uint256 _swapValue,
+                                     DataTypes.CoverageLevel _coverageLevel)
+                  → chiama internamente PremiumCalculator.calculatePremium
+  COSA FA       : view function (non modifica stato), ritorna uint256
+                  Il trader la usa solo per mostrare il costo prima di pagare
+
+  AZIONE: Calcolo premio (formula attuariale completa)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : MEVInsurance.insuredSwap() → premiumCalculator.calculatePremium()
+  FUNZIONE SOL  : PremiumCalculator.sol riga 132
+                  calculatePremium(uint256 _swapValue,
+                                   DataTypes.CoverageLevel _coverageLevel)
+  COSA FA       : applica la formula:
+                    comp1 = patt * lPercent / 10000
+                    comp2 = (tint * eFNR / (10000 - eFNR)) / vbase
+                    comp3 = coracle24h / vbase
+                    baseRate = comp1 + comp2 + comp3
+                    basePremium = swapValue * baseRate / 10000
+                    basePremium *= (10000 + mBase + mAdj) / 10000
+                    premium = basePremium * fcov[livello] / 10000
+  RITORNA       : uint256 — importo in wei da pagare in MEVI
+
+  AZIONE: Trader paga il premio e registra lo swap assicurato
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : trader.py → ins.functions.insuredSwap(val, livello)
+  FUNZIONE SOL  : MEVInsurance.sol riga 354
+                  insuredSwap(uint256 _swapValue,
+                              DataTypes.CoverageLevel _coverageLevel)
+                  external nonReentrant
+  COSA FA       : 1. chiama tierSystem.checkAndUpgrade() → aggiorna tier
+                  2. verifica il trader non sia in blacklist
+                  3. verifica swapValue <= maxSwapValue[tier]
+                     (per Platinum: maxAllowed = stake * 10000 / alphaStakeBps)
+                  4. chiama premiumCalculator.calculatePremium()
+                  5. token.transferFrom(trader → contratto, premio)
+                  6. crea InsuredSwap in insuredSwaps[]
+                  7. incrementa profile.totalSwaps
+  EVENTO        : SwapInsured(swapId, user, swapValue, premiumPaid)
+  NOTA          : dopo questa tx il trader fa amm.swap() separatamente
+
+  AZIONE: Trader esegue lo swap reale sull'AMM
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : trader.py → amm.functions.swap(usdc.address, val)
+  FUNZIONE SOL  : MockAMM.sol riga 110
+                  swap(address _tokenIn, uint256 _amountIn)
+                  external returns (uint256 amountOut)
+  COSA FA       : implementa la curva x*y=k:
+                    amountOut = reserveOut * amountIn / (reserveIn + amountIn)
+                  trasferisce tokenIn dal trader al contratto
+                  trasferisce tokenOut (MEVI) dal contratto al trader
+                  aggiorna reserveA e reserveB
+  EVENTO        : Swap(sender, tokenIn, amountIn, amountOut)
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 3 — ATTACCO SANDWICH (il bot attacca)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Bot esegue il FRONT-RUN (compra MEVI prima della vittima)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : mev_bot.py → amm.functions.swap(usdc.address, bot_amount)
+                  con gasPrice = vittima_gasPrice * 1.2
+  FUNZIONE SOL  : MockAMM.sol riga 110 — stessa swap()
+  COSA FA       : compra MEVI con USDC
+                  alza il prezzo MEVI nell'AMM (perché reserveB-USDC sale,
+                  reserveA-MEVI scende)
+                  → la vittima riceverà meno MEVI del previsto
+  NOTA          : la tx del bot arriva PRIMA della vittima nel blocco
+                  perché ha gasPrice più alto
+
+  AZIONE: Bot esegue il BACK-RUN (rivende MEVI dopo la vittima)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : mev_bot.py → amm.functions.swap(mevi.address, bot_amount*0.99)
+                  con gasPrice = vittima_gasPrice * 0.9
+  FUNZIONE SOL  : MockAMM.sol riga 110 — stessa swap()
+  COSA FA       : vende il 99.9% del MEVI appena comprato
+                  realizza il profitto: ha comprato MEVI a prezzo basso,
+                  lo rivende a prezzo (leggermente) più alto dopo il pump
+                  della vittima
+
+  NOTA IMPORTANTE — calcolo perdita prima di attaccare:
+  ─────────────────────────────────────────────────────────────────────
+  FUNZIONE PY   : mev_bot.py → _compute_sandwich_loss(amm, victim_amount, bot_amount)
+                  (non è on-chain, è calcolo Python prima di eseguire)
+  COSA FA       : legge reserveA/reserveB con amm.functions.reserveA/B().call()
+                  simula la formula x*y=k due volte:
+                    out_senza_attacco = MEVI che avrebbe ricevuto la vittima
+                    out_con_attacco   = MEVI che riceve con frontrun
+                    loss_mevi  = out_senza - out_con
+                    loss_pct   = loss_mevi / out_senza * 100
+                  scrive il risultato in config/attack_log.json
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 4 — APERTURA DEL CLAIM (la vittima chiede il rimborso)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Trader apre un claim per lo swap attaccato
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : trader.py → ins.functions.submitClaim(
+                    swap_id, front_hash, victim_hash, back_hash, loss, bot_addr)
+  FUNZIONE SOL  : MEVInsurance.sol riga 421
+                  submitClaim(uint256 _swapId,
+                              bytes32 _txHash1, _txHash2, _txHash3,
+                              uint256 _loss,
+                              address _botAddress)
+                  external nonReentrant
+  COSA FA       : verifica: swap appartiene al trader, non già claimato,
+                            trader non in blacklist, loss <= swapValue
+                  setta insuredSwaps[swapId].claimed = true
+                  genera seed pseudo-casuale per selezione oracle:
+                    seed = keccak256(timestamp, prevrandao, user, claimId)
+                  chiama oracleRegistry.selectOracles(seed, nOracle)
+                  crea Claim in claimsArray[] con status = OracleReview
+                  incrementa profile.totalClaims
+  EVENTO        : ClaimSubmitted(claimId, user, tx1, tx2, tx3,
+                                 swapValue, loss, assignedOracles[])
+
+  AZIONE: Selezione pseudo-casuale degli oracle per il claim
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : MEVInsurance.submitClaim() internamente
+  FUNZIONE SOL  : OracleRegistry.sol riga 403
+                  selectOracles(uint256 _seed, uint256 _n)
+                  external view returns (address[] memory)
+  COSA FA       : filtra solo oracle con status Active e non in watchlist
+                  mescola la lista con Fisher-Yates usando il seed
+                  ritorna i primi _n (= nOracle, default 7)
+  NOTA          : non è random puro — usa prevrandao (beacon chain)
+                  ma in simulazione locale è deterministico con il seed
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 5 — COMMIT-REVEAL DEGLI ORACLE (il voto)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Oracle calcola il FraudScore (off-chain, in Python)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → self_analyze_sandwich(...)
+                  (funzione Python, non on-chain)
+  COSA FA       : legge le tre tx dalla blockchain con w3.eth.get_transaction()
+                  verifica pattern A-B-A (stesso blocco, indici ordinati, same from)
+                  legge profilo utente: ins.functions.getUserProfile(user).call()
+                  calcola 3 componenti:
+                    score_tier    = {Bronze:50, Silver:30, Gold:15, Platinum:0}
+                    score_claim   = tabella % claim/swap
+                    score_network = BFS sul grafo tx on-chain
+                  total = score_tier + score_claim + score_network
+                  se pattern invalido → forza total = 120
+                  RITORNA (fraud_score, pattern_valid)
+
+  AZIONE: Oracle invia il COMMIT (hash blindato del suo voto)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → ins.functions.commitVerdict(claim_id, commit_hash)
+  FUNZIONE SOL  : MEVInsurance.sol riga 467
+                  commitVerdict(uint256 _claimId, bytes32 _commitHash)
+                  external
+  COSA FA       : verifica che msg.sender sia oracle assegnato al claim
+                  verifica che non abbia già fatto commit
+                  verifica che il claim sia in status OracleReview
+                  salva: claimCommits[claimId][oracle] = commitHash
+                  incrementa claim.commitCount
+  EVENTO        : VerdictCommitted(claimId, oracle)
+
+  Come viene calcolato il commitHash in Python:
+    hash = keccak256(fraud_score_uint8 || pattern_valid_bool || salt_bytes32)
+    (oraclec.py riga 260 → compute_commit_hash)
+
+  AZIONE: Oracle invia il REVEAL (svela il voto reale)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → ins.functions.revealVerdict(
+                    claim_id, fraud_score, pattern_valid, salt)
+  FUNZIONE SOL  : MEVInsurance.sol riga 486
+                  revealVerdict(uint256 _claimId, uint8 _fraudScore,
+                                bool _patternValid, bytes32 _salt)
+                  external
+  COSA FA       : verifica msg.sender sia oracle assegnato
+                  verifica non abbia già rivelato
+                  verifica: keccak256(score || pattern || salt) == commit salvato
+                            → se non coincide: REVERT "Hash mismatch"
+                  aggiunge fraudScore a claim.revealedScores[]
+                  incrementa patternValidVotes o patternInvalidVotes
+                  incrementa claim.revealCount
+  EVENTO        : VerdictRevealed(claimId, oracle, fraudScore, patternValid)
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 6 — FINALIZZAZIONE DEL CLAIM (decisione finale)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Finalizzazione del claim (calcolo mediana → decisione)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → ins.functions.finalizeClaim(claim_id)
+                  (può essere chiamata da chiunque, non solo oracle)
+  FUNZIONE SOL  : MEVInsurance.sol riga 514
+                  finalizeClaim(uint256 _claimId) external nonReentrant
+  COSA FA (in ordine):
+
+    STEP 1 — Pattern check:
+      conta quanti oracle hanno votato "pattern invalido"
+      se invalidi >= 70% (patternInvalidThresholdBps = 7000 bps):
+        → status = InvalidPattern, fraudScore forzato a 100, FINE
+      EVENTO: ClaimFinalized(claimId, InvalidPattern, 100, 0)
+
+    STEP 2 — Calcolo mediana:
+      chiama _calculateMedian(claim.revealedScores)
+      (ordina l'array e prende il valore centrale)
+
+    STEP 3 — Check dispersione:
+      dispersione = max(scores) - min(scores)
+      se dispersione > dispersioneThreshold (20) e non già revisione secondaria:
+        → reset tutti i voti, seleziona nuovi oracle, riapre il claim
+        → chiama _rewardRevealedOracles() per pagare chi aveva già votato
+        EVENTO: SecondaryReviewTriggered(claimId, dispersione, newOracles[])
+        FINE (claim riaperto)
+
+    STEP 4 — Decisione per tier:
+      Bronze / Silver:
+        mediana <= thetaReject (80) → CAPTCHA Required
+        mediana >  thetaReject (80) → Rejected + blacklist + debt 20%
+      Gold / Platinum:
+        mediana <  thetaApprove (60) → Approved
+        mediana <= thetaReject  (80) → CAPTCHA Required
+        mediana >  thetaReject  (80) → Rejected + blacklist + debt 20%
+
+    STEP 5 — Se APPROVED: emette payout
+      payout = loss * coveragePercentBps[livello] / 10000
+        livello LOW    (0) → 50%
+        livello MEDIUM (1) → 70%
+        livello HIGH   (2) → 100%
+      totalPayout = payout + gasRefundAmount (default 0.01 MEVI)
+      token.transfer(user, totalPayout)
+      EVENTO: PayoutIssued(claimId, user, payout)
+      EVENTO: GasRefundIssued(claimId, user, gasRefundAmount)
+
+    STEP 6 — Tracking bot (se approved):
+      incrementa botAttackCount[botAddr] e botTotalDamage[botAddr]
+      aggiunge bot alla blacklist dei bot noti
+      EVENTO: BotBlacklisted(botAddress, attackCount, totalDamage)
+
+    STEP 7 — Reward oracle:
+      chiama _rewardRevealedOracles(claimId)
+      per ogni oracle che ha rivelato:
+        chiama _payOracleReward(oracle)
+        trasferisce rClaim ETH (default 0.002 ETH) all'oracle
+      chiama _penalizeInactiveOracles(claimId)
+        penalizza chi era assegnato ma non ha rivelato
+      EVENTO: OracleRewarded(oracle, amount)
+
+    STEP 8 — Se CAPTCHA Required:
+      seleziona 3 oracle speciali per la sfida captcha
+      crea struct ClaimCaptcha in claimCaptchas[claimId]
+      EVENTO: ClaimCaptchaRequired(claimId, user, captchaOracles[3])
+
+  AZIONE: Calcolo mediana dei FraudScore
+  ─────────────────────────────────────────────────────────────────────
+  FUNZIONE SOL  : MEVInsurance.sol riga 1444
+                  _calculateMedian(uint8[] storage _scores)
+                  internal view returns (uint256)
+  COSA FA       : insertion sort sull'array dei voti
+                  se lunghezza dispari → valore centrale
+                  se lunghezza pari   → media dei due centrali
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 7 — CAPTCHA (meccanismo anti-abuso)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Oracle pubblica la sfida CAPTCHA (in leetspeak)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → ins.functions.publishClaimCaptcha(
+                    claim_id, challenge_leetspeak, answer_hash)
+  FUNZIONE SOL  : MEVInsurance.sol riga 978
+                  publishClaimCaptcha(uint256 _claimId,
+                                      string calldata _challenge,
+                                      bytes32 _answerHash)
+  COSA FA       : verifica che msg.sender sia uno dei 3 oracle CAPTCHA
+                  salva il testo della sfida e l'hash della risposta
+                  EVENTO: ClaimCaptchaChallengePublished(claimId, challenge)
+
+  AZIONE: Utente invia la risposta al CAPTCHA
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py (oracle speciale) → ins.functions.submitClaimCaptchaAnswer(
+                    claim_id, answer_plaintext)
+  FUNZIONE SOL  : MEVInsurance.sol riga 1000
+                  submitClaimCaptchaAnswer(uint256 _claimId, string calldata _answer)
+  COSA FA       : salva la risposta, calcola keccak256(answer) e confronta
+                  EVENTO: ClaimCaptchaAnswerSubmitted(claimId, user)
+
+  AZIONE: Oracle verifica il CAPTCHA e vota
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : oraclec.py → ins.functions.submitClaimCaptchaVerdict(
+                    claim_id, is_valid)
+  FUNZIONE SOL  : MEVInsurance.sol riga 1013
+                  submitClaimCaptchaVerdict(uint256 _claimId, bool _isValid)
+  COSA FA       : oracle vota approve o reject
+                  se raggiunta maggioranza (2/3):
+                    se approvato → emette payout (come in finalizeClaim Approved)
+                    se rigettato → claim Rejected
+  EVENTO        : ClaimCaptchaVerdictSubmitted(claimId, oracle, isValid)
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 8 — TIER SYSTEM (upgrade livello utente)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Check e upgrade automatico del tier
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : MEVInsurance.insuredSwap() → tierSystem.checkAndUpgrade()
+  FUNZIONE SOL  : TierSystem.sol riga 185
+                  checkAndUpgrade(address _user) external
+  COSA FA       : legge il profilo utente da MEVInsurance
+                  controlla condizioni di upgrade:
+                    Bronze → Silver: swaps >= silverMinSwaps (default 20)
+                                     giorni attivi >= silverMinDays (7)
+                                     avgFraudScore <= silverMaxFraudScore (40)
+                    Silver → Gold:   swaps >= goldMinSwaps (default 50)
+                                     giorni >= goldMinDays (30)
+                                     avgFraudScore <= goldMaxFraudScore (30)
+                  se condizioni soddisfatte → aggiorna tier
+  EVENTO        : TierUpgraded(user, fromTier, toTier)
+
+  AZIONE: Trader richiede upgrade a Platinum
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : trader.py → ins.functions.requestPlatinum(max_swap)
+  FUNZIONE SOL  : MEVInsurance.sol riga 796
+                  requestPlatinum(uint256 _desiredMaxSwap) external payable
+  COSA FA       : verifica che il trader sia almeno Gold
+                  calcola stake richiesto:
+                    required = desiredMaxSwap * alphaStakeBps / 10000
+                  verifica msg.value >= required
+                  salva platinumStake[user] = msg.value
+                  avvia processo di verifica (CAPTCHA Platinum)
+  EVENTO        : PlatinumRequested(user, stakeDeposited, desiredMaxSwap)
+
+  AZIONE: Sincronizza dati utente tra MEVInsurance e TierSystem
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : chiamata interna in MEVInsurance
+  FUNZIONE SOL  : TierSystem.sol riga 159
+                  syncUserData(address _user,
+                               uint256 _totalSwaps,
+                               uint256 _avgFraudScore)
+  COSA FA       : aggiorna totalSwaps e avgFraudScore nel TierSystem
+                  usato per il calcolo del tier upgrade
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 9 — SLASHING ORACLE (penalità per disonestà)
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Registra deviazione di un oracle dal voto mediano
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : MEVInsurance.finalizeClaim() internamente (via authorized)
+  FUNZIONE SOL  : OracleRegistry.sol riga 230
+                  recordDeviation(address _oracle, uint256 _absoluteDeviation)
+                  external onlyOwnerOrAuthorized
+  COSA FA       : somma la deviazione al contatore dell'oracle
+                  se deviazioneScore >= kWatchlist * deltaWatchlist:
+                    aggiunge all'oracle alla watchlist
+  EVENTO        : OracleDeviationRecorded(oracle, newDeviationScore)
+                  OracleWatchlisted(oracle, deviationScore)
+
+  AZIONE: Qualcuno segnala un oracle disonesto (avvia slashing formale)
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : chiunque → slashingSystem.functions.submitReport(accused, proofs)
+  FUNZIONE SOL  : SlashingSystem.sol riga 147
+                  submitReport(address _accusedOracle, bytes calldata _proofs)
+                  external payable nonReentrant
+  COSA FA       : richiede un deposito ETH dal reporter (reportDeposit)
+                  seleziona una giuria di oracle (nJury, default 5)
+                  crea Report con status Pending
+
+  AZIONE: Giuria vota (commit-reveal) quanto slashare l'oracle accusato
+  ─────────────────────────────────────────────────────────────────────
+  FUNZIONE SOL  : SlashingSystem.sol riga 207
+                  commitJuryVote(uint256 _reportId, bytes32 _commitHash)
+                  SlashingSystem.sol riga 233
+                  revealJuryVote(uint256 _reportId, uint8 _slashPercent, bytes32 _salt)
+  COSA FA       : stesso meccanismo commit-reveal usato per i claim
+                  slashPercent = 0-100% dello stake da confiscare
+
+  AZIONE: Finalizzazione slashing
+  ─────────────────────────────────────────────────────────────────────
+  FUNZIONE SOL  : SlashingSystem.sol riga 277
+                  finalizeSlashing(uint256 _reportId) external nonReentrant
+  COSA FA       : calcola mediana dello slashPercent votato
+                  se mediana >= thetaExpulsion:
+                    chiama oracleRegistry.expelOracle(accused) → espulso
+                  altrimenti:
+                    chiama oracleRegistry.slashOracle(accused, amount)
+                    → confisca una % dello stake
+  EVENTO        : SlashingFinalized(reportId, status, slashAmount)
+                  OracleSlashed(oracle, slashAmount)
+
+  AZIONE: Penalità inattività oracle
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : MEVInsurance.finalizeClaim() → _penalizeInactiveOracles()
+  FUNZIONE SOL  : OracleRegistry.sol riga 305
+                  penalizeInactivity(address _oracle, uint256 _amount,
+                                     address _recipient)
+                  external onlyOwnerOrAuthorized
+  COSA FA       : sottrae _amount dallo stake dell'oracle inattivo
+                  invia la penalità al pool oracle (recipient = oracleRegistry)
+  EVENTO        : OracleInactivityPenalized(oracle, amount)
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 10 — SOLVENCY RATIO E PARAMETRI FORMULA PREMIO
+════════════════════════════════════════════════════════════════════════
+
+  AZIONE: Lettura del Solvency Ratio live
+  ─────────────────────────────────────────────────────────────────────
+  CHI LA CHIAMA : monitor.py → premiumCalc.functions.getSolvencyRatio().call()
+  FUNZIONE SOL  : PremiumCalculator.sol riga 184
+                  getSolvencyRatio() public view returns (uint256)
+  COSA FA       : totalLiabilities = pendingLiabilities + expectedClaims7d
+                  if totalLiabilities == 0 → ritorna 10**18 (∞)
+                  else → poolBalance * 10000 / totalLiabilities
+                  (10000 = 1.0x, 15000 = 1.5x)
+
+  AZIONE: Aggiornamento dati di mercato per il premio
+  ─────────────────────────────────────────────────────────────────────
+  FUNZIONE SOL  : PremiumCalculator.sol riga 231
+                  updateMarketData(uint256 _tint, uint256 _vbase,
+                                   uint256 _coracle24h)
+  COSA FA       : aggiorna tint (frode intercettata 24h),
+                            vbase (volume swap assicurati 24h),
+                            coracle24h (costi oracle 24h)
+                  poi chiama updateSolvencyData() per ricalcolare mAdj
+  EVENTO        : MarketDataUpdated(tint, vbase, coracle24h)
+
+  AZIONE: Aggiornamento solvency e margine adattivo
+  ─────────────────────────────────────────────────────────────────────
+  FUNZIONE SOL  : PremiumCalculator.sol riga 198
+                  updateSolvencyData(uint256 _poolBalance,
+                                     uint256 _pendingLiabilities,
+                                     uint256 _expectedClaims7d)
+  COSA FA       : aggiorna i dati del pool
+                  calcola SR = poolBalance / (pendingLiab + expectedClaims)
+                  adatta mAdj:
+                    SR > srSafe     (1.5x) → mAdj  = 0      (premi normali)
+                    SR > srCritical (1.3x) → mAdj  = deltaMmed (premi +5%)
+                    SR <= srCritical       → mAdj  = deltaMhigh (premi +10%)
+  EVENTO        : SolvencyUpdated(poolBalance, pendingLiabilities,
+                                   expectedClaims7d, solvencyRatio, newMAdj)
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 11 — GOVERNANCE (impostazione parametri)
+════════════════════════════════════════════════════════════════════════
+
+Tutte queste funzioni sono chiamate da orchestrator.py → apply_governance_params()
+Tutte richiedono onlyOwner (solo il deployer le può chiamare).
+
+  MEVInsurance.sol:
+  ─────────────────────────────────────────────────────────────────────
+  setNOracle(uint256)             riga 1268 — n oracle per claim (default 7)
+  setThetaReject(uint256)         riga 1348 — soglia rigetto (default 80)
+  setThetaApprove(uint256)        riga 1358 — soglia approv. (default 60)
+  setOracleTimeout(uint256)       riga 1338 — timeout oracle reveal (3 giorni)
+  setPatternInvalidThresholdBps() riga 1368 — soglia pattern invalido (7000 bps)
+  setDispersioneThreshold(uint256)riga 1378 — soglia dispersione (20 punti)
+  setAlphaStakeBps(uint256)       riga 969  — stake Platinum (2000 bps = 20%)
+  setGasRefundAmount(uint256)     riga 1405 — gas refund (0.01 MEVI in wei)
+  setInactivityPenalty(uint256)   riga 1395 — penale inattività (0.001 ETH)
+
+  PremiumCalculator.sol:
+  ─────────────────────────────────────────────────────────────────────
+  setPatt(uint256)      riga 247 — prob. attacco (default 500 bps = 5%)
+  setLPercent(uint256)  riga 257 — perdita media (default 200 bps = 2%)
+  setEFNR(uint256)      riga 262 — false negative rate (2000 bps = 20%)
+  setMBase(uint256)     riga 268 — margine base (2000 bps = 20%)
+  setPmin(uint256)      riga 273 — premio minimo (0 = off)
+  setSRSafe(uint256)    riga 283 — SR sicuro (15000 = 1.5x)
+  setSRCritical(uint256)riga 288 — SR critico (13000 = 1.3x)
+  setDeltaMmed(uint256) riga 293 — margine adj. medio (500 bps = 5%)
+  setDeltaMhigh(uint256)riga 298 — margine adj. alto (1000 bps = 10%)
+
+  OracleRegistry.sol:
+  ─────────────────────────────────────────────────────────────────────
+  setBaseStake(uint256) riga 552 — stake base oracle (0.1 ETH)
+  setTActivation(uint256)riga 557 — tempo attivazione (7 giorni)
+  setTCooldown(uint256) riga 562 — cooldown withdrawal (30 giorni)
+  setKWatchlist(uint256)riga 567 — n deviazioni per watchlist (2)
+  setDeltaWatchlist()   riga 572 — soglia deviazione (10 punti)
+  setRClaim(uint256)    riga 582 — reward per claim (0.002 ETH)
+
+
+════════════════════════════════════════════════════════════════════════
+  PARTE 12 — EVENTI ON-CHAIN (letti dal monitor per il report)
+════════════════════════════════════════════════════════════════════════
+
+Questi eventi vengono emessi durante la simulazione e il monitor
+li legge con get_logs() per costruire il report economico.
+
+  MEVInsurance.sol:
+  ─────────────────────────────────────────────────────────────────────
+  SwapInsured(swapId, user, swapValue, premiumPaid)
+    → ogni swap assicurato → monitor conta come INFLOW MEVI
+    → monitor accumula total_in_mevi e swaps_count
+
+  ClaimSubmitted(claimId, user, tx1, tx2, tx3, swapValue, loss, oracles[])
+    → ogni claim aperto → monitor conta claims_count
+    → monitor accumula total_claim_swap_value e total_loss_reported
+
+  PayoutIssued(claimId, user, amount)
+    → ogni rimborso approvato → monitor conta come OUTFLOW MEVI
+    → monitor accumula total_out_mevi e payouts_approved
+
+  GasRefundIssued(claimId, user, refundAmount)
+    → ogni rimborso gas → monitor conta come OUTFLOW MEVI
+
+  OracleRewarded(oracle, amount)
+    → ogni reward oracle → monitor conta come OUTFLOW ETH
+
+  OracleRegistry.sol:
+  ─────────────────────────────────────────────────────────────────────
+  OracleSlashed(oracle, slashAmount)
+    → stake confiscato → monitor conta come INFLOW ETH
+
+  MEVInsurance.sol:
+  ─────────────────────────────────────────────────────────────────────
+  PlatinumRequested(user, stakeDeposited, desiredMaxSwap)
+    → stake Platinum → monitor conta come INFLOW ETH
+
+
+════════════════════════════════════════════════════════════════════════
+  SCHEMA RAPIDO — FLUSSO COMPLETO IN UNA PAGINA
+════════════════════════════════════════════════════════════════════════
+
+  [TRADER]                   [BOT MEV]              [ORACLE]
+
+  insuredSwap()              (legge mempool)         registerOracle()
+    ↓ paga premium MEVI                              activateOracle()
+    SwapInsured emesso        →frontrun: swap()
+                                                          |
+  swap() su AMM ←sandwich→  →backrun: swap()            |
+    ↓ riceve meno MEVI                                   |
+                                                          |
+  submitClaim()                                           |
+    ↓ ClaimSubmitted emesso                              |
+    ↓ oracle selezionati     ←── selectOracles() ────────↓
+                                                     calcola FraudScore
+                                                     commitVerdict()
+                                                     revealVerdict()
+                                                          |
+  (aspetta)                                          finalizeClaim()
+    ↓                                                     |
+    ↓ mediana < 60 (Gold/Plat)                           |
+    ↓ oppure mediana <= 80 + CAPTCHA ok                  |
+    ↓                                                     |
+  PayoutIssued ←──────────── token.transfer() ──────────↓
+  GasRefundIssued                                    OracleRewarded
+
+
+════════════════════════════════════════════════════════════════════════
+  GUIDA RAPIDA — DOVE TROVARE OGNI COSA NEL CODICE
+════════════════════════════════════════════════════════════════════════
+
+  "Come viene calcolato il premio?"
+    → PremiumCalculator.sol:132 calculatePremium()
+
+  "Dove viene pagato il premio?"
+    → MEVInsurance.sol:391 token.transferFrom(trader, contratto, premio)
+    (dentro insuredSwap)
+
+  "Come l'oracle assegna il punteggio a un claim?"
+    → oraclec.py:344 self_analyze_sandwich() — calcolo Python
+    → MEVInsurance.sol:467 commitVerdict() — invio hash on-chain
+    → MEVInsurance.sol:486 revealVerdict() — invio voto on-chain
+
+  "Dove viene decisa l'approvazione o il rigetto?"
+    → MEVInsurance.sol:514 finalizeClaim()
+    → logica di decisione alle righe 595-628
+
+  "Come viene calcolato il payout?"
+    → MEVInsurance.sol:665-676
+    → payout = loss * coveragePercentBps[livello] / 10000
+
+  "Dove viene calcolata la perdita del sandwich?"
+    → mev_bot.py:30 _compute_sandwich_loss() — calcolo Python (x*y=k)
+    → risultato scritto in config/attack_log.json
+
+  "Cos'è il Solvency Ratio e dove viene calcolato?"
+    → PremiumCalculator.sol:184 getSolvencyRatio()
+    → SR = poolBalance / (pendingLiabilities + expectedClaims7d)
+
+  "Dove vengono generati i numeri del report?"
+    → monitor.py:409 generate_report()
+    → legge da self.flows (accumulato da _backfill + poll)
+    → dati on-chain da self.snapshots (accumulato da _take_snapshot)
+
+════════════════════════════════════════════════════════════════════════

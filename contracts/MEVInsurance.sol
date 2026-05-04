@@ -9,133 +9,93 @@ import "./OracleRegistry.sol";
 import "./PremiumCalculator.sol";
 import "./TierSystem.sol";
 
-/**
- * @title MEVInsurance
- * @dev Insurance contract protecting traders against MEV sandwich attacks.
- *
- * Phase 3 refactor: full commit-reveal oracle evaluation system.
- * - Users register, buy policies, submit claims with 3 tx hashes
- * - Oracles are assigned via OracleRegistry, commit-reveal fraud scores
- * - Claims finalized by median fraud score with tier-based thresholds
- * - Pattern validity voting (>=70% invalid -> immediate rejection)
- * - Dispersione check (max-min > 20 -> flagged for review)
- *
- * Uses Checks-Effects-Interactions pattern throughout.
- * All percentages in basis points (10000 = 100%).
- */
+interface ITierSystem {
+    function checkAndUpgrade(address _user) external;
+    function getTier(address _user) external view returns (DataTypes.Tier);
+    function syncUserData(address _user, uint256 _totalSwaps, uint256 _avgFraudScore) external;
+    function getMaxDailySwaps(DataTypes.Tier _tier) external pure returns (uint256);
+}
+
 contract MEVInsurance is Ownable, ReentrancyGuard {
     using DataTypes for *;
-
-    // -------------------------------------------------------
-    //  External contracts
-    // -------------------------------------------------------
 
     IERC20 public token;
     OracleRegistry public oracleRegistry;
     PremiumCalculator public premiumCalculator;
-    TierSystem public tierSystem;
+    ITierSystem public tierSystem;
 
-    // -------------------------------------------------------
-    //  Protocol Parameters (configurable, Table 8 defaults)
-    // -------------------------------------------------------
-
-    /// @dev Number of oracles assigned per claim
     uint256 public nOracle = 7;
-
-    /// @dev Default policy duration
     uint256 public policyDuration = 30 days;
-
-    /// @dev Symbolic policy activation fee (1 MEVI)
     uint256 public activationFee = 1 * 1e18;
-
-    /// @dev Default premium fallback if no PremiumCalculator set
     uint256 public defaultPremium = 100 * 1e18;
-
-    /// @dev Default coverage amount
     uint256 public defaultCoverage = 1000 * 1e18;
-
-    /// @dev Timeout for oracle reveals (after which finalize can proceed)
     uint256 public oracleTimeout = 3 days;
-
-    /// @dev Pattern invalidity threshold in basis points (7000 = 70%)
     uint256 public patternInvalidThresholdBps = 7000;
-
-    /// @dev Dispersione threshold (max - min fraud score)
     uint256 public dispersioneThreshold = 20;
-
-    /// @dev Fraud score threshold for rejection (basis points of 100-scale)
     uint256 public thetaReject = 80;
-
-    /// @dev Fraud score threshold for approval (Gold/Platinum only)
     uint256 public thetaApprove = 60;
 
-    /// @dev Coverage percentage per level in basis points
     mapping(DataTypes.CoverageLevel => uint256) public coveragePercentBps;
-
-    /// @dev Max daily swaps per tier
     mapping(DataTypes.Tier => uint256) public maxDailySwaps;
+    mapping(DataTypes.Tier => uint256) public maxSwapValue;
 
-    // -------------------------------------------------------
-    //  State
-    // -------------------------------------------------------
-
-    /// @dev User profiles
     mapping(address => DataTypes.UserProfile) public userProfiles;
-
-    /// @dev User policies
     mapping(address => DataTypes.Policy) public policies;
-
-    /// @dev All claims
     DataTypes.Claim[] public claimsArray;
-
-    /// @dev Oracle commit hashes per claim: claimId => oracle => commitHash
     mapping(uint256 => mapping(address => bytes32)) public claimCommits;
-
-    /// @dev Track if oracle has revealed for a claim: claimId => oracle => bool
     mapping(uint256 => mapping(address => bool)) public hasRevealed;
-
-    /// @dev Mapping from user to their claim IDs
     mapping(address => uint256[]) public userClaimIds;
-
-    /// @dev All insured swaps
     DataTypes.InsuredSwap[] public insuredSwaps;
-
-    /// @dev Mapping from user to their insured swap IDs
     mapping(address => uint256[]) public userInsuredSwapIds;
 
-    // -------------------------------------------------------
-    //  Bot Blacklist (C9)
-    // -------------------------------------------------------
-
-    /// @dev Number of approved claims attributed to a bot address
     mapping(address => uint256) public botAttackCount;
-
-    /// @dev Total damage (loss) attributed to a bot address
     mapping(address => uint256) public botTotalDamage;
-
-    /// @dev Whether a bot address is blacklisted
     mapping(address => bool) public botBlacklisted;
 
-    /// @dev Threshold: number of approved claims before bot is blacklisted
-    uint256 public botBlacklistThreshold = 3;
+    address[] public blacklistedBots;
+    mapping(address => bool) public isInBotBlacklist;
+    address[] public blacklistedUsers;
+    mapping(address => bool) public isInUserBlacklist;
+    address[] public whitelistedAddresses;
+    mapping(address => bool) public isInWhitelist;
 
-    // -------------------------------------------------------
-    //  Inactivity Penalty (C10)
-    // -------------------------------------------------------
-
-    /// @dev Penalty deducted from non-revealing oracle stake (in wei)
     uint256 public inactivityPenalty = 0.001 ether;
-
-    // -------------------------------------------------------
-    //  Gas Refund (C13)
-    // -------------------------------------------------------
-
-    /// @dev Configurable gas refund amount for approved claims (in MEVI tokens)
     uint256 public gasRefundAmount = 0.01 ether;
+    uint256 public alphaStakeBps = 2000;
 
-    // -------------------------------------------------------
-    //  Events
-    // -------------------------------------------------------
+    mapping(address => uint256) public platinumStake;
+    uint256 public totalPlatinumStake;
+
+    struct PlatinumRequest {
+        uint256 desiredMaxSwap;
+        uint256 stakeDeposited;
+        address[3] assignedOracles;
+        bytes32 answerHash;
+        string challengeText;
+        uint8 approveVotes;
+        uint8 rejectVotes;
+        uint8 totalVotes;
+        bool resolved;
+        bool challengeSet;
+        bool answerSubmitted;
+        uint256 timestamp;
+    }
+    mapping(address => PlatinumRequest) public platinumRequests;
+    mapping(address => mapping(address => bool)) public platinumOracleVoted;
+
+    struct ClaimCaptcha {
+        address[3] assignedOracles;
+        bytes32 answerHash;
+        string challengeText;
+        uint8 approveVotes;
+        uint8 rejectVotes;
+        uint8 totalVotes;
+        bool resolved;
+        bool challengeSet;
+        bool answerSubmitted;
+    }
+    mapping(uint256 => ClaimCaptcha) public claimCaptchas;
+    mapping(uint256 => mapping(address => bool)) public claimCaptchaVoted;
 
     event UserRegistered(address indexed user);
     event PolicyPurchased(
@@ -180,158 +140,109 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         uint256 premiumPaid
     );
     event ParameterUpdated(string param, uint256 value);
-
-    // -------------------------------------------------------
-    //  Constructor
-    // -------------------------------------------------------
+    event WhitelistAdded(address[] addresses);
+    event WhitelistRemoved(address indexed addr);
+    event PlatinumRequested(
+        address indexed user,
+        uint256 desiredMaxSwap,
+        uint256 stakeDeposited,
+        address[3] assignedOracles
+    );
+    event CaptchaChallengePublished(address indexed user, string challengeText, bytes32 answerHash);
+    event CaptchaAnswerSubmitted(address indexed user, bytes32 answerHash);
+    event CaptchaVerdictSubmitted(address indexed user, address indexed oracle, bool isValid);
+    event PlatinumUpgradeResult(address indexed user, bool approved, uint8 approveVotes, uint8 rejectVotes);
+    event OracleRewarded(address indexed oracle, uint256 amount);
+    event OracleRewardSkipped(address indexed oracle, string reason);
+    event PoolRebalanced(uint256 meviConverted, uint256 ethReceived);
+    event ClaimCaptchaRequired(uint256 indexed claimId, address indexed user, address[3] assignedOracles);
+    event ClaimCaptchaChallengePublished(uint256 indexed claimId, string challengeText, bytes32 answerHash);
+    event ClaimCaptchaAnswerSubmitted(uint256 indexed claimId, address indexed user, bytes32 answerHash);
+    event ClaimCaptchaVerdictSubmitted(uint256 indexed claimId, address indexed oracle, bool isValid);
 
     constructor(address _token, address _oracleRegistry) Ownable(msg.sender) {
         token = IERC20(_token);
         oracleRegistry = OracleRegistry(payable(_oracleRegistry));
 
         // Coverage payout percentages (basis points) - PDF Table 2
-        coveragePercentBps[DataTypes.CoverageLevel.Low] = 5000;    // 50%
-        coveragePercentBps[DataTypes.CoverageLevel.Medium] = 7000; // 70%
-        coveragePercentBps[DataTypes.CoverageLevel.High] = 10000;  // 100%
+        coveragePercentBps[DataTypes.CoverageLevel.Low] = 5000;
+        coveragePercentBps[DataTypes.CoverageLevel.Medium] = 7000;
+        coveragePercentBps[DataTypes.CoverageLevel.High] = 10000;
 
-        // Max daily swaps per tier
         maxDailySwaps[DataTypes.Tier.Bronze] = 3;
         maxDailySwaps[DataTypes.Tier.Silver] = 3;
         maxDailySwaps[DataTypes.Tier.Gold] = 4;
-        maxDailySwaps[DataTypes.Tier.Platinum] = type(uint256).max; // unlimited
+        maxDailySwaps[DataTypes.Tier.Platinum] = type(uint256).max;
+        maxSwapValue[DataTypes.Tier.Bronze]   = 1000 * 1e18;
+        maxSwapValue[DataTypes.Tier.Silver]   = 3000 * 1e18;
+        maxSwapValue[DataTypes.Tier.Gold]     = 5000 * 1e18;
+        maxSwapValue[DataTypes.Tier.Platinum] = 0;
     }
 
-    // -------------------------------------------------------
-    //  User Management
-    // -------------------------------------------------------
-
-    /// @dev Track registered users
     mapping(address => bool) public registeredUsers;
 
-    /**
-     * @dev Register as a user in the insurance system.
-     */
     function registerUser() external {
-        require(!registeredUsers[msg.sender], "Already registered");
-
-        registeredUsers[msg.sender] = true;
-        userProfiles[msg.sender].tier = DataTypes.Tier.Bronze;
-
-        emit UserRegistered(msg.sender);
+        if(!registeredUsers[msg.sender]) {
+            registeredUsers[msg.sender] = true;
+            userProfiles[msg.sender].tier = DataTypes.Tier.Bronze;
+            emit UserRegistered(msg.sender);
+        }
     }
 
-    /**
-     * @dev Buy an insurance policy. Charges only a symbolic activation fee (1 MEVI).
-     *      Premium is calculated and paid per swap via insuredSwap().
-     * @param _coverageLevel Desired coverage level
-     */
-    function buyPolicy(DataTypes.CoverageLevel _coverageLevel) external {
-        require(registeredUsers[msg.sender], "Not registered");
-        require(!policies[msg.sender].active, "Policy already active");
-        require(!userProfiles[msg.sender].isBlacklisted, "User is blacklisted");
-
-        uint256 start = block.timestamp;
-        uint256 end = start + policyDuration;
-
-        // Effects
-        policies[msg.sender] = DataTypes.Policy({
-            holder: msg.sender,
-            coverageLevel: _coverageLevel,
-            premium: activationFee,
-            startTime: start,
-            endTime: end,
-            maxSwapValue: defaultCoverage,
-            active: true
-        });
-
-        userProfiles[msg.sender].policyActive = true;
-        userProfiles[msg.sender].policyStart = start;
-        userProfiles[msg.sender].policyEnd = end;
-        userProfiles[msg.sender].coverageLevel = _coverageLevel;
-
-        // Interaction: transfer symbolic activation fee
-        require(
-            token.transferFrom(msg.sender, address(this), activationFee),
-            "Activation fee transfer failed"
-        );
-
-        emit PolicyPurchased(msg.sender, _coverageLevel, activationFee, start, end);
-    }
-
-    // -------------------------------------------------------
-    //  Insured Swap (premium per swap)
-    // -------------------------------------------------------
-
-    /**
-     * @dev Register an insured swap. Premium is calculated and paid here.
-     *      User must have an active policy. After calling this, the user can
-     *      submit a claim if the swap is attacked.
-     * @param _swapValue Value of the swap to insure
-     */
-    function insuredSwap(uint256 _swapValue) external nonReentrant {
-        DataTypes.Policy storage policy = policies[msg.sender];
-        require(policy.active, "No active policy");
-        require(block.timestamp <= policy.endTime, "Policy expired");
-        require(_swapValue > 0, "Swap value must be > 0");
-        require(_swapValue <= policy.maxSwapValue, "Swap value exceeds policy max");
-
-        // Calculate premium
-        uint256 premium;
-        if (address(premiumCalculator) != address(0)) {
-            premium = premiumCalculator.calculatePremium(_swapValue, policy.coverageLevel);
-            if (premium == 0) premium = (_swapValue * 150) / 10000; // fallback: 1.5% min
-        } else {
-            premium = (_swapValue * 150) / 10000; // 1.5% of swap value
+    function insuredSwap(uint256 _swapValue, DataTypes.CoverageLevel _coverageLevel) external nonReentrant {
+        if (address(tierSystem) != address(0) && userProfiles[msg.sender].tier != DataTypes.Tier.Platinum) {
+            tierSystem.checkAndUpgrade(msg.sender);
         }
 
-        // Check daily swap limits per tier
+        if (!registeredUsers[msg.sender]) {
+            registeredUsers[msg.sender] = true;
+            if (userProfiles[msg.sender].tier != DataTypes.Tier.Platinum) {
+                if (address(tierSystem) != address(0)) {
+                    userProfiles[msg.sender].tier = tierSystem.getTier(msg.sender);
+                } else {
+                    userProfiles[msg.sender].tier = DataTypes.Tier.Bronze;
+                }
+            }
+            emit UserRegistered(msg.sender);
+        }
         DataTypes.UserProfile storage profile = userProfiles[msg.sender];
-        uint256 today = block.timestamp / 1 days;
-        if (profile.lastSwapDay == today) {
-            require(
-                profile.dailySwapCount < maxDailySwaps[profile.tier],
-                "Daily swap limit reached"
-            );
-            profile.dailySwapCount++;
-        } else {
-            profile.lastSwapDay = today;
-            profile.dailySwapCount = 1;
-        }
-        profile.totalSwaps++;
 
-        // Store insured swap
+        if (address(tierSystem) != address(0) && profile.tier != DataTypes.Tier.Platinum) {
+            profile.tier = tierSystem.getTier(msg.sender);
+        }
+
+        uint256 maxAllowed;
+        require(!profile.isBlacklisted, "User is blacklisted");
+        require(_swapValue > 0, "Swap value must be > 0");
+        if (profile.tier == DataTypes.Tier.Platinum) {
+            require(platinumStake[msg.sender] > 0, "No Platinum stake deposited");
+            maxAllowed = (platinumStake[msg.sender] * 10000) / alphaStakeBps;
+        } else {
+            maxAllowed = maxSwapValue[profile.tier];
+        }
+        require(_swapValue <= maxAllowed, "Swap value exceeds tier limit");
+
+        uint256 premium;
+        require(address(premiumCalculator) != address(0), "PremiumCalculator not set");
+        premium = premiumCalculator.calculatePremium(_swapValue, _coverageLevel);
+
+        require(token.transferFrom(msg.sender, address(this), premium), "Premium payment failed");
+
         uint256 swapId = insuredSwaps.length;
         insuredSwaps.push(DataTypes.InsuredSwap({
             user: msg.sender,
             swapValue: _swapValue,
             premiumPaid: premium,
+            coverageLevel: _coverageLevel,
             timestamp: block.timestamp,
             claimed: false
         }));
         userInsuredSwapIds[msg.sender].push(swapId);
-
-        // Interaction: transfer premium
-        require(
-            token.transferFrom(msg.sender, address(this), premium),
-            "Premium transfer failed"
-        );
+        profile.totalSwaps++;
 
         emit SwapInsured(swapId, msg.sender, _swapValue, premium);
     }
 
-    // -------------------------------------------------------
-    //  Claim Submission
-    // -------------------------------------------------------
-
-    /**
-     * @dev Submit a claim for a sandwich attack on a previously insured swap.
-     * @param _swapId ID of the insured swap (from insuredSwap())
-     * @param _txHash1 Frontrun transaction hash
-     * @param _txHash2 Victim transaction hash
-     * @param _txHash3 Backrun transaction hash
-     * @param _loss Claimed loss amount
-     * @param _botAddress Address of the suspected MEV bot (C9)
-     */
     function submitClaim(
         uint256 _swapId,
         bytes32 _txHash1,
@@ -340,151 +251,88 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         uint256 _loss,
         address _botAddress
     ) external nonReentrant {
-        uint256 gasStart = gasleft();
         require(_swapId < insuredSwaps.length, "Invalid swap ID");
-        DataTypes.InsuredSwap storage insSwap = insuredSwaps[_swapId];
-        require(insSwap.user == msg.sender, "Not swap owner");
-        require(!insSwap.claimed, "Swap already claimed");
+        DataTypes.InsuredSwap storage s = insuredSwaps[_swapId];
+        require(s.user == msg.sender, "Not your swap");
+        require(!s.claimed, "Already claimed");
+        require(!userProfiles[msg.sender].isBlacklisted, "User blacklisted");
+        require(_loss <= s.swapValue, "Loss > swap value");
 
-        DataTypes.Policy storage policy = policies[msg.sender];
-        require(policy.active, "No active policy");
-        require(block.timestamp <= policy.endTime, "Policy expired");
-        require(_loss > 0, "Loss must be > 0");
-        require(_loss <= insSwap.swapValue, "Loss exceeds swap value");
-
-        insSwap.claimed = true;
-
-        DataTypes.UserProfile storage profile = userProfiles[msg.sender];
-
-        // Select oracles via RANDAO-seeded Fisher-Yates (PDF §2.3)
-        // block.prevrandao = RANDAO beacon (post-merge), not manipulable by single validator
-        // Production: consider Chainlink VRF for stronger guarantees
-        uint256 seed = uint256(keccak256(abi.encodePacked(
-            block.timestamp, block.prevrandao, msg.sender, claimsArray.length
-        )));
-        address[] memory selectedOracles = oracleRegistry.selectOracles(seed, nOracle);
-
+        s.claimed = true;
         uint256 claimId = claimsArray.length;
 
-        // Push a new claim
-        claimsArray.push();
-        DataTypes.Claim storage newClaim = claimsArray[claimId];
+        uint256 seed = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender, claimId)));
+        address[] memory assignedOracles = oracleRegistry.selectOracles(seed, nOracle);
+
+        DataTypes.Claim storage newClaim = claimsArray.push();
         newClaim.user = msg.sender;
+        newClaim.status = DataTypes.ClaimStatus.OracleReview;
         newClaim.txHash1 = _txHash1;
         newClaim.txHash2 = _txHash2;
         newClaim.txHash3 = _txHash3;
-        newClaim.status = DataTypes.ClaimStatus.OracleReview;
-        newClaim.coverageLevel = policy.coverageLevel;
-        newClaim.swapValue = insSwap.swapValue;
+        newClaim.swapValue = s.swapValue;
         newClaim.loss = _loss;
         newClaim.botAddress = _botAddress;
+        newClaim.coverageLevel = s.coverageLevel;
         newClaim.timestamp = block.timestamp;
-
-        for (uint256 i = 0; i < selectedOracles.length; i++) {
-            newClaim.assignedOracles.push(selectedOracles[i]);
-        }
+        newClaim.assignedOracles = assignedOracles;
 
         userClaimIds[msg.sender].push(claimId);
-        profile.totalClaims++;
+        userProfiles[msg.sender].totalClaims++;
 
-        // Record gas used for potential refund on approval (C13)
-        newClaim.submitGasUsed = gasStart - gasleft();
-
-        emit ClaimSubmitted(
-            claimId, msg.sender,
-            _txHash1, _txHash2, _txHash3,
-            insSwap.swapValue, _loss,
-            selectedOracles
-        );
+        emit ClaimSubmitted(claimId, msg.sender, _txHash1, _txHash2, _txHash3, s.swapValue, _loss, assignedOracles);
     }
 
-    // -------------------------------------------------------
-    //  Oracle Commit-Reveal
-    // -------------------------------------------------------
-
-    /**
-     * @dev Oracle commits a verdict hash for a claim.
-     * @param _claimId The claim ID
-     * @param _commitHash keccak256(abi.encodePacked(fraudScore, patternValid, salt))
-     */
     function commitVerdict(uint256 _claimId, bytes32 _commitHash) external {
         require(_claimId < claimsArray.length, "Invalid claim ID");
-        DataTypes.Claim storage claim = claimsArray[_claimId];
-        require(claim.status == DataTypes.ClaimStatus.OracleReview, "Claim not in review");
-        require(_isAssignedOracle(_claimId, msg.sender), "Not assigned oracle");
+        require(_isAssignedOracle(_claimId, msg.sender), "Not assigned");
+        require(claimsArray[_claimId].status == DataTypes.ClaimStatus.OracleReview, "Not in review");
         require(claimCommits[_claimId][msg.sender] == bytes32(0), "Already committed");
-        require(_commitHash != bytes32(0), "Invalid commit hash");
 
         claimCommits[_claimId][msg.sender] = _commitHash;
-        claim.commitCount++;
+        claimsArray[_claimId].commitCount++;
 
         emit VerdictCommitted(_claimId, msg.sender);
     }
 
-    /**
-     * @dev Oracle reveals their verdict for a claim.
-     * @param _claimId The claim ID
-     * @param _fraudScore Fraud score (0-100)
-     * @param _patternValid Whether the sandwich pattern is valid
-     * @param _salt Random salt used in commit
-     */
-    function revealVerdict(
-        uint256 _claimId,
-        uint8 _fraudScore,
-        bool _patternValid,
-        bytes32 _salt
-    ) external {
+    function revealVerdict(uint256 _claimId, uint8 _fraudScore, bool _patternValid, bytes32 _salt) external {
         require(_claimId < claimsArray.length, "Invalid claim ID");
-        DataTypes.Claim storage claim = claimsArray[_claimId];
-        require(claim.status == DataTypes.ClaimStatus.OracleReview, "Claim not in review");
-        require(_isAssignedOracle(_claimId, msg.sender), "Not assigned oracle");
+        require(_isAssignedOracle(_claimId, msg.sender), "Not assigned");
         require(!hasRevealed[_claimId][msg.sender], "Already revealed");
         require(_fraudScore <= 130, "Fraud score must be 0-130");
 
-        // Verify commit hash
-        bytes32 expectedHash = keccak256(abi.encodePacked(_fraudScore, _patternValid, _salt));
-        require(claimCommits[_claimId][msg.sender] == expectedHash, "Commit hash mismatch");
+        bytes32 commit = claimCommits[_claimId][msg.sender];
+        require(commit != bytes32(0), "No commit found");
+        require(keccak256(abi.encodePacked(_fraudScore, _patternValid, _salt)) == commit, "Hash mismatch");
 
         hasRevealed[_claimId][msg.sender] = true;
+        DataTypes.Claim storage claim = claimsArray[_claimId];
         claim.revealedScores.push(_fraudScore);
-        claim.revealCount++;
-
         if (_patternValid) {
             claim.patternValidVotes++;
         } else {
             claim.patternInvalidVotes++;
         }
+        claim.revealCount++;
 
         emit VerdictRevealed(_claimId, msg.sender, _fraudScore, _patternValid);
     }
 
-    // -------------------------------------------------------
-    //  Claim Finalization
-    // -------------------------------------------------------
-
-    /**
-     * @dev Finalize a claim after all oracles have revealed (or timeout).
-     * @param _claimId The claim ID
-     */
     function finalizeClaim(uint256 _claimId) external nonReentrant {
         require(_claimId < claimsArray.length, "Invalid claim ID");
         DataTypes.Claim storage claim = claimsArray[_claimId];
-        require(claim.status == DataTypes.ClaimStatus.OracleReview, "Claim not in review");
+        require(claim.status == DataTypes.ClaimStatus.OracleReview, "Not in review");
 
-        // All oracles revealed OR timeout elapsed
-        bool allRevealed = claim.revealCount == claim.assignedOracles.length;
-        bool timeoutReached = block.timestamp >= claim.timestamp + oracleTimeout;
-        require(allRevealed || timeoutReached, "Not all oracles revealed and timeout not reached");
-        require(claim.revealCount > 0, "No oracle reveals");
+        bool timeoutReached = block.timestamp > claim.timestamp + oracleTimeout;
+        bool allRevealed = (claim.revealCount == claim.assignedOracles.length);
+        require(allRevealed || timeoutReached, "Wait for reveals or timeout");
+        require(claim.revealCount > 0, "No reveals");
 
-        uint256 totalVotes = claim.patternValidVotes + claim.patternInvalidVotes;
-
-        // Step 1: Check pattern validity - if >= 70% say invalid, reject
-        if (totalVotes > 0) {
-            uint256 invalidPercent = (claim.patternInvalidVotes * 10000) / totalVotes;
-            if (invalidPercent >= patternInvalidThresholdBps) {
+        if (claim.revealCount >= 3) {
+            uint256 invalidBps = (claim.patternInvalidVotes * 10000) / claim.revealCount;
+            if (invalidBps >= patternInvalidThresholdBps) {
                 claim.status = DataTypes.ClaimStatus.InvalidPattern;
-                claim.finalFraudScore = 100; // max fraud
+                claim.finalFraudScore = 100;
                 _updateUserFraudScore(claim.user, 100);
                 userProfiles[claim.user].rejectedClaims++;
                 emit ClaimFinalized(_claimId, DataTypes.ClaimStatus.InvalidPattern, 100, 0);
@@ -492,11 +340,9 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             }
         }
 
-        // Step 2: Calculate median fraud score
         uint256 median = _calculateMedian(claim.revealedScores);
         claim.finalFraudScore = median;
 
-        // Step 3: Calculate dispersione (max - min)
         uint256 minScore = type(uint256).max;
         uint256 maxScore = 0;
         for (uint256 i = 0; i < claim.revealedScores.length; i++) {
@@ -506,11 +352,9 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         }
         claim.dispersione = maxScore - minScore;
 
-        // Step 3b: Secondary review if dispersione > threshold and not already reviewed
         if (claim.dispersione > dispersioneThreshold && !claim.secondaryReview) {
             claim.secondaryReview = true;
 
-            // Reset claim for new oracle round
             delete claim.revealedScores;
             claim.patternValidVotes = 0;
             claim.patternInvalidVotes = 0;
@@ -521,47 +365,43 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             claim.status = DataTypes.ClaimStatus.OracleReview;
             claim.timestamp = block.timestamp;
 
-            // Clear old commits/reveals for this claim
             for (uint256 i = 0; i < claim.assignedOracles.length; i++) {
                 address oldOracle = claim.assignedOracles[i];
                 claimCommits[_claimId][oldOracle] = bytes32(0);
                 hasRevealed[_claimId][oldOracle] = false;
             }
 
-            // Select new oracles
             uint256 seed = uint256(keccak256(abi.encodePacked(
                 block.timestamp, block.prevrandao, claim.user, _claimId, uint256(1)
             )));
             address[] memory newOracles = oracleRegistry.selectOracles(seed, nOracle);
 
-            // Replace assigned oracles
             delete claim.assignedOracles;
             for (uint256 i = 0; i < newOracles.length; i++) {
                 claim.assignedOracles.push(newOracles[i]);
             }
+            _rewardRevealedOracles(_claimId);
 
             emit SecondaryReviewTriggered(_claimId, maxScore - minScore, newOracles);
             return;
         }
 
-        // Step 4: Tier-based decision
         DataTypes.Tier userTier = userProfiles[claim.user].tier;
         DataTypes.ClaimStatus finalStatus;
 
         if (userTier == DataTypes.Tier.Bronze || userTier == DataTypes.Tier.Silver) {
-            // Bronze/Silver: score < thetaReject -> CAPTCHA, score >= thetaReject -> blacklist/reject
-            if (median < thetaReject) {
+            if (median <= thetaReject) {
                 finalStatus = DataTypes.ClaimStatus.CAPTCHARequired;
             } else {
                 finalStatus = DataTypes.ClaimStatus.Rejected;
                 userProfiles[claim.user].isBlacklisted = true;
-                // Add 20% penalty debt on the loss
+                if (!isInUserBlacklist[claim.user]) {
+                    isInUserBlacklist[claim.user] = true;
+                    blacklistedUsers.push(claim.user);
+                }
                 userProfiles[claim.user].debt += (claim.loss * 2000) / 10000;
             }
         } else {
-            // Gold/Platinum: score < thetaApprove -> approved,
-            // thetaApprove <= score <= thetaReject -> CAPTCHA,
-            // score > thetaReject -> blacklist/reject
             if (median < thetaApprove) {
                 finalStatus = DataTypes.ClaimStatus.Approved;
             } else if (median <= thetaReject) {
@@ -569,6 +409,10 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             } else {
                 finalStatus = DataTypes.ClaimStatus.Rejected;
                 userProfiles[claim.user].isBlacklisted = true;
+                if (!isInUserBlacklist[claim.user]) {
+                    isInUserBlacklist[claim.user] = true;
+                    blacklistedUsers.push(claim.user);
+                }
                 userProfiles[claim.user].debt += (claim.loss * 2000) / 10000;
             }
         }
@@ -576,16 +420,41 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         claim.status = finalStatus;
         _updateUserFraudScore(claim.user, median);
 
-        // Step 5: If approved, calculate and issue payout + gas refund (C13)
+        if (finalStatus == DataTypes.ClaimStatus.CAPTCHARequired) {
+            uint256 captchaSeed = uint256(keccak256(abi.encodePacked(
+                block.timestamp, block.prevrandao, claim.user, _claimId, uint256(99)
+            )));
+            address[] memory captchaOracles = oracleRegistry.selectOracles(captchaSeed, 3);
+            address[3] memory co3;
+            co3[0] = captchaOracles[0];
+            co3[1] = captchaOracles[1];
+            co3[2] = captchaOracles[2];
+
+            claimCaptchas[_claimId] = ClaimCaptcha({
+                assignedOracles: co3,
+                answerHash: bytes32(0),
+                challengeText: "",
+                approveVotes: 0,
+                rejectVotes: 0,
+                totalVotes: 0,
+                resolved: false,
+                challengeSet: false,
+                answerSubmitted: false
+            });
+
+            for (uint256 i = 0; i < 3; i++) {
+                claimCaptchaVoted[_claimId][co3[i]] = false;
+            }
+
+            emit ClaimCaptchaRequired(_claimId, claim.user, co3);
+        }
+
         if (finalStatus == DataTypes.ClaimStatus.Approved) {
             userProfiles[claim.user].approvedClaims++;
             uint256 coverPercent = coveragePercentBps[claim.coverageLevel];
             uint256 payout = (claim.loss * coverPercent) / 10000;
-
-            // Add gas refund to payout (C13)
             uint256 totalPayout = payout + gasRefundAmount;
 
-            // Interaction: transfer payout + gas refund
             require(
                 token.transfer(claim.user, totalPayout),
                 "Payout transfer failed"
@@ -599,60 +468,47 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             userProfiles[claim.user].rejectedClaims++;
         }
 
-        // Step 6: Track bot stats if approved (C9)
         if (finalStatus == DataTypes.ClaimStatus.Approved && claim.botAddress != address(0)) {
             botAttackCount[claim.botAddress]++;
             botTotalDamage[claim.botAddress] += claim.loss;
-            if (!botBlacklisted[claim.botAddress] && botAttackCount[claim.botAddress] >= botBlacklistThreshold) {
+            if (!botBlacklisted[claim.botAddress]) {
                 botBlacklisted[claim.botAddress] = true;
+                if (!isInBotBlacklist[claim.botAddress]) {
+                    isInBotBlacklist[claim.botAddress] = true;
+                    blacklistedBots.push(claim.botAddress);
+                }
                 emit BotBlacklisted(claim.botAddress, botAttackCount[claim.botAddress], botTotalDamage[claim.botAddress]);
             }
         }
 
         emit ClaimFinalized(_claimId, finalStatus, median, claim.dispersione);
 
-        // Reward revealed oracles + penalize inactive ones (C10)
         _rewardRevealedOracles(_claimId);
         _penalizeInactiveOracles(_claimId);
     }
 
-    /**
-     * @dev Reward all oracles that revealed their verdict for a claim.
-     * Reward is fixed (rClaim in OracleRegistry) and independent of outcome.
-     */
     function _rewardRevealedOracles(uint256 _claimId) internal {
         DataTypes.Claim storage claim = claimsArray[_claimId];
         for (uint256 i = 0; i < claim.assignedOracles.length; i++) {
             address oracle = claim.assignedOracles[i];
             if (hasRevealed[_claimId][oracle]) {
-                // Try to reward; skip silently if registry lacks funds or oracle ineligible
-                try oracleRegistry.rewardOracle(oracle) {} catch {}
+                try this._payOracleReward(oracle) {} catch {}
             }
         }
     }
 
-    /**
-     * @dev Penalize oracles that were assigned but did not reveal (C10).
-     * Small stake deduction via OracleRegistry.slashOracle.
-     */
     function _penalizeInactiveOracles(uint256 _claimId) internal {
         DataTypes.Claim storage claim = claimsArray[_claimId];
         for (uint256 i = 0; i < claim.assignedOracles.length; i++) {
             address oracle = claim.assignedOracles[i];
             if (!hasRevealed[_claimId][oracle]) {
-                try oracleRegistry.penalizeInactivity(oracle, inactivityPenalty) {
+                try oracleRegistry.penalizeInactivity(oracle, inactivityPenalty, address(this)) {
                     emit OracleInactivityPenalized(_claimId, oracle, inactivityPenalty);
                 } catch {}
             }
         }
     }
 
-    /**
-     * @dev Resolve a claim that requires CAPTCHA verification.
-     * Called by owner after off-chain CAPTCHA check.
-     * @param _claimId The claim ID
-     * @param _approved Whether the CAPTCHA was passed and claim is approved
-     */
     function resolveCAPTCHA(uint256 _claimId, bool _approved) external onlyOwner nonReentrant {
         require(_claimId < claimsArray.length, "Invalid claim ID");
         DataTypes.Claim storage claim = claimsArray[_claimId];
@@ -664,8 +520,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
 
             uint256 coverPercent = coveragePercentBps[claim.coverageLevel];
             uint256 payout = (claim.loss * coverPercent) / 10000;
-
-            // Add gas refund to payout (C13)
             uint256 totalPayout = payout + gasRefundAmount;
 
             require(
@@ -678,6 +532,18 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
                 emit GasRefundIssued(_claimId, claim.user, gasRefundAmount);
             }
             emit ClaimFinalized(_claimId, DataTypes.ClaimStatus.Approved, claim.finalFraudScore, claim.dispersione);
+            if (claim.botAddress != address(0)) {
+                botAttackCount[claim.botAddress]++;
+                botTotalDamage[claim.botAddress] += claim.loss;
+                if (!botBlacklisted[claim.botAddress]) {
+                    botBlacklisted[claim.botAddress] = true;
+                    if (!isInBotBlacklist[claim.botAddress]) {
+                        isInBotBlacklist[claim.botAddress] = true;
+                        blacklistedBots.push(claim.botAddress);
+                    }
+                    emit BotBlacklisted(claim.botAddress, botAttackCount[claim.botAddress], botTotalDamage[claim.botAddress]);
+                }
+            }
         } else {
             claim.status = DataTypes.ClaimStatus.Rejected;
             userProfiles[claim.user].rejectedClaims++;
@@ -685,9 +551,306 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         }
     }
 
-    // -------------------------------------------------------
-    //  View Functions
-    // -------------------------------------------------------
+    function requestPlatinum(uint256 _desiredMaxSwap) external payable nonReentrant {
+        require(!userProfiles[msg.sender].isBlacklisted, "User blacklisted");
+        require(userProfiles[msg.sender].tier != DataTypes.Tier.Platinum, "Already Platinum");
+        require(!platinumRequests[msg.sender].challengeSet || platinumRequests[msg.sender].resolved, "Request already pending");
+
+        uint256 requiredStake = (_desiredMaxSwap * alphaStakeBps) / 10000;
+        require(msg.value >= requiredStake, "Insufficient stake");
+        totalPlatinumStake += msg.value;
+
+        uint256 seed = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender)));
+        address[] memory selected = oracleRegistry.selectOracles(seed, 3);
+
+        address[3] memory oracles3;
+        oracles3[0] = selected[0];
+        oracles3[1] = selected[1];
+        oracles3[2] = selected[2];
+
+        platinumRequests[msg.sender] = PlatinumRequest({
+            desiredMaxSwap: _desiredMaxSwap,
+            stakeDeposited: msg.value,
+            assignedOracles: oracles3,
+            answerHash: bytes32(0),
+            challengeText: "",
+            approveVotes: 0,
+            rejectVotes: 0,
+            totalVotes: 0,
+            resolved: false,
+            challengeSet: false,
+            answerSubmitted: false,
+            timestamp: block.timestamp
+        });
+
+        for (uint256 i = 0; i < 3; i++) {
+            platinumOracleVoted[msg.sender][oracles3[i]] = false;
+        }
+
+        emit PlatinumRequested(msg.sender, _desiredMaxSwap, msg.value, oracles3);
+    }
+
+    function publishCaptchaChallenge(
+        address _user,
+        string calldata _challengeText,
+        bytes32 _answerHash
+    ) external {
+        PlatinumRequest storage req = platinumRequests[_user];
+        require(!req.resolved, "Already resolved");
+        require(!req.challengeSet, "Challenge already set");
+        require(
+            msg.sender == req.assignedOracles[0] ||
+            msg.sender == req.assignedOracles[1] ||
+            msg.sender == req.assignedOracles[2],
+            "Not assigned oracle"
+        );
+
+        req.challengeText = _challengeText;
+        req.answerHash = _answerHash;
+        req.challengeSet = true;
+
+        emit CaptchaChallengePublished(_user, _challengeText, _answerHash);
+    }
+
+    function submitCaptchaAnswer(string calldata _answer) external {
+        PlatinumRequest storage req = platinumRequests[msg.sender];
+        require(req.challengeSet, "No challenge set");
+        require(!req.resolved, "Already resolved");
+        require(!req.answerSubmitted, "Answer already submitted");
+
+        req.answerSubmitted = true;
+        emit CaptchaAnswerSubmitted(msg.sender, keccak256(abi.encodePacked(_answer)));
+    }
+
+    function submitCaptchaVerdict(address _user, bool _isValid) external nonReentrant {
+        PlatinumRequest storage req = platinumRequests[_user];
+        require(!req.resolved, "Already resolved");
+        require(req.answerSubmitted, "User hasn't answered yet");
+        require(
+            msg.sender == req.assignedOracles[0] ||
+            msg.sender == req.assignedOracles[1] ||
+            msg.sender == req.assignedOracles[2],
+            "Not assigned oracle"
+        );
+        require(!platinumOracleVoted[_user][msg.sender], "Already voted");
+
+        platinumOracleVoted[_user][msg.sender] = true;
+        req.totalVotes++;
+
+        if (_isValid) {
+            req.approveVotes++;
+        } else {
+            req.rejectVotes++;
+        }
+
+        emit CaptchaVerdictSubmitted(_user, msg.sender, _isValid);
+
+        try this._payOracleReward(msg.sender) {} catch {}
+
+        if (req.approveVotes >= 2) {
+            req.resolved = true;
+            platinumStake[_user] = req.stakeDeposited;
+            userProfiles[_user].tier = DataTypes.Tier.Platinum;
+
+            if (address(tierSystem) != address(0)) {
+                tierSystem.syncUserData(
+                    _user,
+                    userProfiles[_user].totalSwaps,
+                    userProfiles[_user].avgFraudScore
+                );
+            }
+
+            emit PlatinumUpgradeResult(_user, true, req.approveVotes, req.rejectVotes);
+        } else if (req.rejectVotes >= 2) {
+            req.resolved = true;
+            uint256 stakeToReturn = req.stakeDeposited;
+            req.stakeDeposited = 0;
+            totalPlatinumStake -= stakeToReturn;
+
+            (bool sent, ) = _user.call{value: stakeToReturn}("");
+            require(sent, "Stake refund failed");
+
+            emit PlatinumUpgradeResult(_user, false, req.approveVotes, req.rejectVotes);
+        }
+    }
+
+    function getPlatinumRequest(address _user) external view returns (
+        uint256 desiredMaxSwap,
+        uint256 stakeDeposited,
+        address[3] memory assignedOracles,
+        string memory challengeText,
+        uint8 approveVotes,
+        uint8 rejectVotes,
+        bool resolved,
+        bool challengeSet,
+        bool answerSubmitted
+    ) {
+        PlatinumRequest storage req = platinumRequests[_user];
+        return (
+            req.desiredMaxSwap,
+            req.stakeDeposited,
+            req.assignedOracles,
+            req.challengeText,
+            req.approveVotes,
+            req.rejectVotes,
+            req.resolved,
+            req.challengeSet,
+            req.answerSubmitted
+        );
+    }
+
+    function setAlphaStakeBps(uint256 _val) external onlyOwner {
+        alphaStakeBps = _val;
+        emit ParameterUpdated("alphaStakeBps", _val);
+    }
+
+    function publishClaimCaptcha(
+        uint256 _claimId,
+        string calldata _challengeText,
+        bytes32 _answerHash
+    ) external {
+        ClaimCaptcha storage cc = claimCaptchas[_claimId];
+        require(!cc.resolved, "Already resolved");
+        require(!cc.challengeSet, "Challenge already set");
+        require(
+            msg.sender == cc.assignedOracles[0] ||
+            msg.sender == cc.assignedOracles[1] ||
+            msg.sender == cc.assignedOracles[2],
+            "Not assigned oracle"
+        );
+
+        cc.challengeText = _challengeText;
+        cc.answerHash = _answerHash;
+        cc.challengeSet = true;
+
+        emit ClaimCaptchaChallengePublished(_claimId, _challengeText, _answerHash);
+    }
+
+    function submitClaimCaptchaAnswer(uint256 _claimId, string calldata _answer) external {
+        require(_claimId < claimsArray.length, "Invalid claim ID");
+        require(claimsArray[_claimId].user == msg.sender, "Not your claim");
+        ClaimCaptcha storage cc = claimCaptchas[_claimId];
+        require(cc.challengeSet, "No challenge set");
+        require(!cc.resolved, "Already resolved");
+        require(!cc.answerSubmitted, "Already answered");
+
+        cc.answerSubmitted = true;
+        emit ClaimCaptchaAnswerSubmitted(_claimId, msg.sender, keccak256(abi.encodePacked(_answer)));
+    }
+
+    function submitClaimCaptchaVerdict(uint256 _claimId, bool _isValid) external nonReentrant {
+        ClaimCaptcha storage cc = claimCaptchas[_claimId];
+        require(!cc.resolved, "Already resolved");
+        require(cc.answerSubmitted, "User hasn't answered");
+        require(
+            msg.sender == cc.assignedOracles[0] ||
+            msg.sender == cc.assignedOracles[1] ||
+            msg.sender == cc.assignedOracles[2],
+            "Not assigned oracle"
+        );
+        require(!claimCaptchaVoted[_claimId][msg.sender], "Already voted");
+
+        claimCaptchaVoted[_claimId][msg.sender] = true;
+        cc.totalVotes++;
+
+        if (_isValid) {
+            cc.approveVotes++;
+        } else {
+            cc.rejectVotes++;
+        }
+
+        emit ClaimCaptchaVerdictSubmitted(_claimId, msg.sender, _isValid);
+
+        try this._payOracleReward(msg.sender) {} catch {}
+
+        if (cc.approveVotes >= 2) {
+            cc.resolved = true;
+            DataTypes.Claim storage claim = claimsArray[_claimId];
+            claim.status = DataTypes.ClaimStatus.Approved;
+            userProfiles[claim.user].approvedClaims++;
+
+            uint256 coverPercent = coveragePercentBps[claim.coverageLevel];
+            uint256 payout = (claim.loss * coverPercent) / 10000;
+            uint256 totalPayout = payout + gasRefundAmount;
+
+            require(token.transfer(claim.user, totalPayout), "Payout failed");
+
+            emit PayoutIssued(_claimId, claim.user, payout);
+            if (gasRefundAmount > 0) {
+                emit GasRefundIssued(_claimId, claim.user, gasRefundAmount);
+            }
+            emit ClaimFinalized(_claimId, DataTypes.ClaimStatus.Approved, claim.finalFraudScore, claim.dispersione);
+            if (claim.botAddress != address(0)) {
+                botAttackCount[claim.botAddress]++;
+                botTotalDamage[claim.botAddress] += claim.loss;
+                if (!botBlacklisted[claim.botAddress]) {
+                    botBlacklisted[claim.botAddress] = true;
+                    if (!isInBotBlacklist[claim.botAddress]) {
+                        isInBotBlacklist[claim.botAddress] = true;
+                        blacklistedBots.push(claim.botAddress);
+                    }
+                    emit BotBlacklisted(claim.botAddress, botAttackCount[claim.botAddress], botTotalDamage[claim.botAddress]);
+                }
+            }
+        } else if (cc.rejectVotes >= 2) {
+            cc.resolved = true;
+            DataTypes.Claim storage claim = claimsArray[_claimId];
+            claim.status = DataTypes.ClaimStatus.Rejected;
+            userProfiles[claim.user].rejectedClaims++;
+            emit ClaimFinalized(_claimId, DataTypes.ClaimStatus.Rejected, claim.finalFraudScore, claim.dispersione);
+        }
+    }
+
+    function getClaimCaptcha(uint256 _claimId) external view returns (
+        address[3] memory assignedOracles,
+        string memory challengeText,
+        uint8 approveVotes,
+        uint8 rejectVotes,
+        bool resolved,
+        bool challengeSet,
+        bool answerSubmitted
+    ) {
+        ClaimCaptcha storage cc = claimCaptchas[_claimId];
+        return (cc.assignedOracles, cc.challengeText, cc.approveVotes, cc.rejectVotes, cc.resolved, cc.challengeSet, cc.answerSubmitted);
+    }
+
+    function addWhitelist(address[] calldata _addrs) external onlyOwner {
+        for (uint256 i = 0; i < _addrs.length; i++) {
+            address addr = _addrs[i];
+            if (!isInWhitelist[addr]) {
+                isInWhitelist[addr] = true;
+                whitelistedAddresses.push(addr);
+            }
+        }
+        emit WhitelistAdded(_addrs);
+    }
+
+    function removeWhitelist(address _addr) external onlyOwner {
+        require(isInWhitelist[_addr], "Address not in whitelist");
+
+        isInWhitelist[_addr] = false;
+        uint256 length = whitelistedAddresses.length;
+        for (uint256 i = 0; i < length; i++) {
+            if (whitelistedAddresses[i] == _addr) {
+                whitelistedAddresses[i] = whitelistedAddresses[length - 1];
+                whitelistedAddresses.pop();
+                break;
+            }
+        }
+        emit WhitelistRemoved(_addr);
+    }
+
+    function getBlacklistedBots() external view returns (address[] memory) {
+        return blacklistedBots;
+    }
+
+    function getBlacklistedUsers() external view returns (address[] memory) {
+        return blacklistedUsers;
+    }
+
+    function getWhitelist() external view returns (address[] memory) {
+        return whitelistedAddresses;
+    }
 
     function getClaimsCount() external view returns (uint256) {
         return claimsArray.length;
@@ -722,9 +885,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         return (c.user, c.status, c.finalFraudScore, c.swapValue, c.loss, c.dispersione, c.revealCount, c.commitCount);
     }
 
-    /**
-     * @dev Get full claim details including tx hashes and bot address (for oracle verification).
-     */
     function getClaimDetails(uint256 _claimId) external view returns (
         address user,
         bytes32 txHash1,
@@ -740,13 +900,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         return (c.user, c.txHash1, c.txHash2, c.txHash3, c.swapValue, c.loss, c.botAddress, c.secondaryReview);
     }
 
-    /**
-     * @dev Estimate the premium for a given swap value and coverage level.
-     *      Allows users to preview the cost before calling insuredSwap().
-     * @param _swapValue Value of the swap to insure
-     * @param _coverageLevel Coverage level of the user's policy
-     * @return premium Estimated premium in MEVI tokens
-     */
     function getPremiumEstimate(uint256 _swapValue, DataTypes.CoverageLevel _coverageLevel)
         external
         view
@@ -754,9 +907,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     {
         if (address(premiumCalculator) != address(0)) {
             premium = premiumCalculator.calculatePremium(_swapValue, _coverageLevel);
-            if (premium == 0) premium = (_swapValue * 150) / 10000;
-        } else {
-            premium = (_swapValue * 150) / 10000;
         }
     }
 
@@ -782,10 +932,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         DataTypes.UserProfile storage p = userProfiles[_user];
         return (p.tier, p.policyActive, p.totalSwaps, p.totalClaims, p.approvedClaims, p.rejectedClaims, p.avgFraudScore, p.isBlacklisted, p.debt);
     }
-
-    // -------------------------------------------------------
-    //  Parameter Setters (owner only)
-    // -------------------------------------------------------
 
     function setNOracle(uint256 _val) external onlyOwner {
         nOracle = _val;
@@ -818,7 +964,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
     }
 
     function setTierSystem(address _tierSystem) external onlyOwner {
-        tierSystem = TierSystem(_tierSystem);
+        tierSystem = ITierSystem(_tierSystem);
         emit ParameterUpdated("tierSystem", uint256(uint160(_tierSystem)));
     }
 
@@ -847,11 +993,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         emit ParameterUpdated("dispersioneThreshold", _val);
     }
 
-    function setBotBlacklistThreshold(uint256 _val) external onlyOwner {
-        botBlacklistThreshold = _val;
-        emit ParameterUpdated("botBlacklistThreshold", _val);
-    }
-
     function setInactivityPenalty(uint256 _val) external onlyOwner {
         inactivityPenalty = _val;
         emit ParameterUpdated("inactivityPenalty", _val);
@@ -866,13 +1007,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         userProfiles[_user].tier = _tier;
     }
 
-    // -------------------------------------------------------
-    //  Internal Helpers
-    // -------------------------------------------------------
-
-    /**
-     * @dev Check if an address is an assigned oracle for a claim.
-     */
     function _isAssignedOracle(uint256 _claimId, address _oracle) internal view returns (bool) {
         address[] storage oracles = claimsArray[_claimId].assignedOracles;
         for (uint256 i = 0; i < oracles.length; i++) {
@@ -881,22 +1015,15 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         return false;
     }
 
-    /**
-     * @dev Calculate the median of a uint8 array using insertion sort.
-     * @param _scores Array of fraud scores
-     * @return median The median value
-     */
     function _calculateMedian(uint8[] storage _scores) internal view returns (uint256) {
         uint256 len = _scores.length;
         require(len > 0, "No scores");
 
-        // Copy to memory for sorting
         uint8[] memory sorted = new uint8[](len);
         for (uint256 i = 0; i < len; i++) {
             sorted[i] = _scores[i];
         }
 
-        // Insertion sort (small arrays, n <= 7 typically)
         for (uint256 i = 1; i < len; i++) {
             uint8 key = sorted[i];
             uint256 j = i;
@@ -907,7 +1034,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             sorted[j] = key;
         }
 
-        // Median
         if (len % 2 == 1) {
             return uint256(sorted[len / 2]);
         } else {
@@ -915,9 +1041,6 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         }
     }
 
-    /**
-     * @dev Update a user's running average fraud score.
-     */
     function _updateUserFraudScore(address _user, uint256 _newScore) internal {
         DataTypes.UserProfile storage profile = userProfiles[_user];
         uint256 totalEvaluated = profile.approvedClaims + profile.rejectedClaims;
@@ -928,4 +1051,50 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
             profile.avgFraudScore = (profile.avgFraudScore * totalEvaluated + _newScore) / (totalEvaluated + 1);
         }
     }
+
+    // Must be called via `this._payOracleReward(oracle)` for try/catch compatibility.
+    // NOT nonReentrant: callers hold the guard; adding it here would revert.
+    function _payOracleReward(address oracle) external {
+        require(msg.sender == address(this), "Only internal");
+
+        uint256 baseReward = oracleRegistry.rClaim();
+        uint256 bps = oracleRegistry.getRewardPercentBps(oracle);
+        uint256 reward = (baseReward * bps) / 10000;
+
+        if (reward == 0) {
+            emit OracleRewardSkipped(oracle, "zero reward");
+            return;
+        }
+
+        if (address(this).balance < totalPlatinumStake + reward) {
+            emit OracleRewardSkipped(oracle, "insufficient pool ETH");
+            return;
+        }
+
+        (bool sent, ) = oracle.call{value: reward}("");
+        if (!sent) {
+            emit OracleRewardSkipped(oracle, "transfer failed");
+            return;
+        }
+
+        emit OracleRewarded(oracle, reward);
+    }
+
+    // Owner sends ETH and receives MEVI from the pool at AMM spot rate (enforced off-chain).
+    // Used to top up the oracle reward fund when ETH balance falls below threshold.
+    function rebalanceToEth(uint256 meviAmount) external payable onlyOwner nonReentrant {
+        require(msg.value > 0, "Must send ETH");
+        require(meviAmount > 0, "meviAmount must be > 0");
+        require(token.balanceOf(address(this)) >= meviAmount, "Pool MEVI insufficient");
+
+        require(token.transfer(owner(), meviAmount), "MEVI transfer failed");
+        emit PoolRebalanced(meviAmount, msg.value);
+    }
+
+    function getPoolEthBalance() external view returns (uint256) {
+        if (address(this).balance < totalPlatinumStake) return 0;
+        return address(this).balance - totalPlatinumStake;
+    }
+
+    receive() external payable {}
 }

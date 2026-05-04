@@ -1,0 +1,814 @@
+════════════════════════════════════════════════════════════════════════
+  MEV INSURANCE — SPIEGAZIONE COMPLETA DEL CODICE
+  (dagli attacchi fino alla generazione del report)
+════════════════════════════════════════════════════════════════════════
+
+INDICE
+  0.  Architettura generale
+  1.  I contratti Solidity
+  2.  La formula del premio assicurativo
+  3.  Il MEV Bot (attaccante)
+  4.  Il Trader (vittima)
+  5.  La rete Oracle (giudici)
+  6.  Il FraudScore — come viene calcolato
+  7.  Il processo di Claim (dall'attacco al rimborso)
+  8.  Il Tier System (livelli utente)
+  9.  L'Orchestratore (chi avvia tutto)
+  10. Il monitor e il pool logger
+  11. Il report economico — struttura e valori
+  12. Come leggere i numeri del report
+  13. I file di configurazione e log
+
+════════════════════════════════════════════════════════════════════════
+  0. ARCHITETTURA GENERALE
+════════════════════════════════════════════════════════════════════════
+
+La simulazione gira su una blockchain locale (Hardhat) e coinvolge
+quattro tipi di attori:
+
+  [TRADER]     → persone che fanno swap su un AMM
+  [BOT MEV]    → robot che esegue attacchi sandwich contro i trader
+  [ORACLE]     → nodi giudici che verificano i claim
+  [PROTOCOLLO] → smart contract che raccoglie premi e paga rimborsi
+
+Il flusso base è:
+
+  1. Trader paga un PREMIO in MEVI al protocollo
+  2. Trader esegue lo swap (USDC → MEVI) sull'AMM
+  3. Bot MEV vede lo swap in mempool e lo "sandwiccia"
+  4. Trader subisce una perdita
+  5. Trader apre un CLAIM
+  6. Oracle verificano il claim (commit-reveal)
+  7. Se valido → PAYOUT in MEVI al trader
+  8. Orchestratore logga tutto su simulation.log
+  9. Monitor scrive snapshot del pool ogni 2 min su simulation.log
+  10. A fine simulazione: generate_economic_report() legge simulation.log
+      e produce il report finale
+
+Token usati nella simulazione:
+  MEVI  = token assicurativo (premi, payout, stake)
+  USDC  = stablecoin simulata (valore degli swap)
+  ETH   = gas + stake oracle + reward oracle
+
+
+════════════════════════════════════════════════════════════════════════
+  1. I CONTRATTI SOLIDITY
+════════════════════════════════════════════════════════════════════════
+
+contracts/MEVInsurance.sol  ← il contratto principale
+  - Riceve i premi con insuredSwap()
+  - Registra ogni swap assicurato (evento SwapInsured)
+  - Riceve i claim con submitClaim()
+  - Coordina il protocollo commit-reveal degli oracle
+  - Emette PayoutIssued quando approva un rimborso
+  - Tiene il pool MEVI (bilancio ERC-20 del contratto)
+
+contracts/PremiumCalculator.sol  ← calcola il prezzo assicurazione
+  - Implementa la formula P = V * [...] descritta nella sezione 2
+  - Parametri modificabili via governance (patt, lPercent, mBase, ecc.)
+  - Funzione getPremiumEstimate(val, livello) → usata dal trader prima
+    di pagare per vedere quanto costerà
+
+contracts/OracleRegistry.sol  ← gestisce la rete oracle
+  - Registra gli oracle con registerOracle() (richiede stake ETH)
+  - Attiva gli oracle con activateOracle()
+  - Assegna gli oracle ai claim in modo pseudo-casuale
+  - Distribuisce i reward ETH agli oracle dopo ogni claim
+  - Gestisce lo slashing (penalità) per oracle disonesti
+
+contracts/TierSystem.sol  ← sistema di livelli utente
+  - Tiene traccia di swap e claim per ogni trader
+  - Livelli: Bronze → Silver → Gold → Platinum
+  - Il livello influenza il FraudScore (Bronze = sospetto, Platinum = affidabile)
+
+contracts/SlashingSystem.sol  ← penalità oracle
+  - Gestisce le dispute sulle votazioni degli oracle
+  - Un oracle che vota in modo anomalo rispetto alla mediana può essere slashato
+
+contracts/MockAMM.sol  ← exchange simulato (x*y=k)
+  - Implementa la curva AMM classica (Uniswap v2), SENZA fee
+  - Formula: amountOut = reserveOut - (k / (reserveIn + amountIn))
+    dove k = reserveIn * reserveOut (prodotto costante)
+  - swap(tokenIn, amountIn) → esegue lo scambio
+  - getAmountOut(tokenIn, amountIn) → solo lettura, stesso calcolo
+  - reserveA = MEVI, reserveB = USDC
+  - addLiquidity(amountA, amountB) → aggiunge liquidità
+  - rebalance() → ripristina le riserve ai valori iniziali (solo owner)
+  - initReserveA, initReserveB → riserve al primo addLiquidity (target)
+
+contracts/MockUSDC.sol / MEVToken.sol  ← token ERC-20 simulati
+
+
+════════════════════════════════════════════════════════════════════════
+  2. LA FORMULA DEL PREMIO ASSICURATIVO
+════════════════════════════════════════════════════════════════════════
+
+La formula è implementata in PremiumCalculator.sol:
+
+  P = max(
+        V * [(Patt * L%) + (Tint * E/(1-E))/Vbase + Coracle/Vbase]
+            * (1 + M) * Fcov ,
+        Pmin * V
+      )
+
+Dove:
+  V        = valore dello swap (in MEVI/USDC)
+  Patt     = probabilità di attacco (bps, default 500 = 5%)
+  L%       = perdita media per attacco riuscito (bps, default 200 = 2%)
+  Tint     = valore totale frode intercettata nelle ultime 24h
+  E (eFNR) = tasso di falsi negativi degli oracle (bps, default 2000=20%)
+  Vbase    = volume totale di swap assicurati nelle ultime 24h
+  Coracle  = costo oracle nelle ultime 24h (reward pagati)
+  M = mBase + mAdj
+      mBase = margine base (default 2000 = 20%)
+      mAdj  = margine adattivo: aumenta se Solvency Ratio è basso
+  Fcov     = fattore copertura per livello (LOW=50%, MED=70%, HIGH=100%)
+  Pmin     = premio minimo (0 = disabilitato nel default)
+
+COSA SIGNIFICA IN PRATICA:
+  - Il premio copre: perdita attesa (Patt*L%) + costi operativi oracle
+    (Coracle/Vbase) + contingenza falsi negativi (Tint*E/(1-E)/Vbase)
+  - Se il pool è in difficoltà (SR basso), il margine M cresce
+    → premi più cari per ricapitalizzare il pool
+  - Il livello di copertura (LOW/MED/HIGH) scala linearmente il premio
+
+
+════════════════════════════════════════════════════════════════════════
+  3. IL MEV BOT (scripts/mev_bot.py)
+════════════════════════════════════════════════════════════════════════
+
+Il bot simula un attaccante reale che opera sulla mempool.
+
+COME FUNZIONA:
+
+  Step 1 — ASCOLTO MEMPOOL
+    Il bot chiama w3.eth.get_block('pending', full_transactions=True)
+    in un loop continuo. Vede tutte le transazioni non ancora minate.
+
+  Step 2 — SELEZIONE BERSAGLIO
+    Filtra le tx dirette all'AMM (MockAMM.swap).
+    Esclude i propri bot e il deployer.
+    Campionamento deterministico: attacca esattamente attack_rate% degli
+    swap visibili (default 5%), separatamente per assicurati e non assicurati.
+
+  Step 3 — CALCOLO PERDITA PRE-FRONTRUN (_compute_sandwich_loss)
+    PRIMA di eseguire il sandwich, calcola usando la formula x*y=k:
+
+      k = reserveUSdc * reserveMEVI          (letti on-chain in quel momento)
+
+      out_no_attack = reserveMEVI - k // (reserveUSdc + victim_wei)
+        → quanto MEVI riceverebbe la vittima SE il bot non attaccasse
+
+      ri_after = reserveUSdc + bot_wei       (pool dopo il frontrun del bot)
+      ro_after = k // ri_after
+      k2       = ri_after * ro_after
+
+      out_with_attack = ro_after - k2 // (ri_after + victim_wei)
+        → quanto MEVI riceverebbe la vittima CON il frontrun già eseguito
+
+    La funzione restituisce anche out_no_attack_wei per uso successivo.
+
+  Step 4 — ESECUZIONE SANDWICH (execute_sandwich)
+    a) FRONT-RUN: bot compra MEVI con gasPrice = vittima_gasPrice * 1.2
+       (si inserisce PRIMA della vittima nel blocco)
+    b) BACK-RUN:  bot rivende il 99% del MEVI con gasPrice = vittima * 0.9
+       (si inserisce DOPO la vittima nel blocco)
+    Entrambe le tx vengono inviate quasi-simultaneamente e minate nello
+    stesso blocco grazie alla priorità gas.
+
+  Step 5 — CALCOLO PERDITA REALE (_actual_victim_loss)   ← CHIAVE
+    DOPO che il sandwich è stato minato, il bot legge gli eventi AMM.Swap
+    dal blocco del frontrun in avanti, cerca la tx della vittima e legge
+    l'amountOut effettivo dall'evento on-chain.
+
+    actual_loss = out_no_attack_wei - amountOut_effettivo
+
+    Questo è il valore REALE perché:
+      - out_no_attack_wei = MEVI atteso PRIMA del frontrun (letto quando
+        le riserve erano ancora inalterate)
+      - amountOut_effettivo = MEVI che la vittima ha DAVVERO ricevuto
+        nell'AMM dopo il frontrun (e qualsiasi altro swap concorrente)
+    La differenza è la perdita esatta dovuta all'attacco, inclusi gli
+    effetti di swap concorrenti nello stesso blocco.
+
+    Se la ricerca dell'evento fallisce, si usa la stima pre-sandwich come
+    fallback.
+
+  Step 6 — REGISTRAZIONE
+    attack_log.json:  tx_hash → { loss_sandwich_mevi: actual_loss, ... }
+    simulation.log:   [ATTACK] NAKED/INSURED ATTACK | loss_sandwich=actual_loss
+
+    NOTA: loss_sandwich nel log = perdita REALE (calcolata post-esecuzione),
+    NON la stima pre-frontrun. Per questo corrisponde al valore nel SWAP log.
+
+
+════════════════════════════════════════════════════════════════════════
+  4. IL TRADER (scripts/trader.py)
+════════════════════════════════════════════════════════════════════════
+
+SWAP NON ASSICURATO (swap_nudo):
+  1. Legge stima_mevi = (reserveA * val) / (reserveB + val) / 1e18
+     (formula AMM identica a getAmountOut, letta PRE-frontrun)
+  2. Approva USDC all'AMM
+  3. Chiama amm.swap(usdc, val)
+  4. Misura mevi_ricevuti = bilancio_dopo - bilancio_prima
+  5. Aspetta _ATTACK_WAIT_SEC secondi poi legge attack_log.json
+
+  Se viene trovato un record in attack_log per la propria tx:
+    perdita = attack_log["loss_sandwich_mevi"]   ← dalla scrittura del bot
+    (il bot ha già calcolato la perdita reale confrontando out_no_attack
+     con l'amountOut effettivo della vittima dall'evento AMM)
+
+  Se attack_log non ha il valore → fallback: max(0, stima - ricevuti)
+
+SWAP ASSICURATO (swap_assicurato):
+  1. stima_mevi = getAmountOut formula (pre-frontrun)
+  2. premio = ins.getPremiumEstimate(val, livello)
+  3. Approva MEVI al contratto → ins.insuredSwap(val, livello)
+     → Il contratto deduce il premio e registra lo swap
+     → Restituisce swap_id univoco
+  4. Approva USDC all'AMM → amm.swap(usdc, val)
+  5. Aspetta e controlla attack_log
+  6. Se attaccato → apre automaticamente il claim
+
+  perdita = attack_log["loss_sandwich_mevi"]   (stesso meccanismo)
+
+PERCHÉ I VALORI BOT ↔ TRADER COINCIDONO:
+  Entrambi usano lo stesso numero: quello scritto dal bot in attack_log
+  dopo aver letto l'evento AMM.Swap della vittima. Non c'è disallineamento
+  temporale perché il trader NON ricalcola la perdita da solo.
+
+APERTURA CLAIM (_do_claim_from_log):
+  Chiama ins.submitClaim(swap_id, loss_wei, front_tx, victim_tx, back_tx)
+  dove loss_wei = attack_log["loss_sandwich_mevi"] convertito in wei.
+
+Livelli di copertura:
+  LOW    (0) = rimborso del 50% della perdita
+  MEDIUM (1) = rimborso del 70% della perdita
+  HIGH   (2) = rimborso del 100% della perdita
+
+COSA VIENE LOGGATO SU simulation.log (tag [  SWAP]):
+  TRADER <addr> | <USDC> USDC | prot: <LOW/MEDIUM/HIGH/NESSUNA> |
+  [premio: <X> MEVI |] stima: <Y> MEVI | ricevuti: <Z> MEVI |
+  ATTACCO: SI/NO [| perdita: <P> MEVI | rimborso: <R> MEVI/NON ASSICURATO]
+
+  dove:
+    stima    = getAmountOut formula pre-frontrun (indicativo, NON usato nel claim)
+    ricevuti = MEVI effettivamente ricevuti dall'AMM (bilancio diff)
+    perdita  = loss_sandwich_mevi da attack_log (perdita reale post-sandwich)
+    rimborso = MEVI ricevuti dal protocollo come payout del claim
+
+
+════════════════════════════════════════════════════════════════════════
+  5. LA RETE ORACLE (scripts/oraclec.py)
+════════════════════════════════════════════════════════════════════════
+
+Gli oracle sono nodi indipendenti che verificano i claim.
+Nella simulazione sono tutti gestiti dallo stesso script ma
+con indirizzi e chiavi separate (account Hardhat 9–20).
+
+SETUP:
+  - Ogni oracle si registra con registerOracle() depositando stake ETH
+  - Si attiva con activateOracle()
+  - Il contratto tiene traccia degli oracle attivi
+
+POLLING CLAIM:
+  L'oracle ascolta l'evento ClaimSubmitted emesso dal contratto.
+  Quando rileva un nuovo claim, controlla se è tra gli oracle assegnati.
+  Se sì, esegue il processo commit-reveal.
+
+PROCESSO COMMIT-REVEAL (anti-collusione):
+  Fase 1 — COMMIT:
+    Ogni oracle calcola il FraudScore (vedi sezione 6)
+    Genera un salt crittografico casuale (32 byte)
+    Calcola hash = keccak256(fraud_score || pattern_valid || salt)
+    Invia l'hash on-chain (commitVerdict) — non rivela ancora il voto
+
+  Fase 2 — REVEAL (dopo che tutti hanno fatto commit):
+    Ogni oracle rivela: fraud_score + pattern_valid + salt
+    Il contratto verifica che keccak256(score || pattern || salt) == hash_inviato
+
+  Fase 3 — FINALIZZAZIONE:
+    finalizeClaim() calcola la MEDIANA dei fraud_score
+    Se mediana < thetaApprove (60) → APPROVATO → payout
+    Se mediana > thetaReject  (80) → RIGETTATO
+    Se 60 ≤ mediana ≤ 80 → CAPTCHA richiesto
+
+CAPTCHA (meccanismo anti-abuso):
+  Un oracle genera una frase in "leetspeak" (es. "v3rif1ca 0k")
+  La risposta corretta è "verifica ok".
+  Un oracle assegnato al CAPTCHA vota per approvare o rigettare.
+
+ERRORI GESTITI:
+  - ERC20InsufficientBalance: pool MEVI troppo basso per pagare il claim
+    → l'oracle logga "pool MEVI insufficiente per il payout — skip"
+    → NON stampa l'errore raw (fix: utils.send_tx non stampa errori ERC20)
+  - "already resolved": il claim è già stato finalizzato
+    → l'oracle logga "consenso raggiunto" e skippa silenziosamente
+
+REWARD ORACLE:
+  Dopo ogni finalizeClaim() (indipendentemente dall'esito), ogni oracle
+  assegnato che ha rivelato riceve ETH dal pool oracle del contratto.
+  Il valore viene aggiornato in oracle_stats.json.
+
+STATS ORACLE (config/oracle_stats.json):
+  { oracle_rewards_count, oracle_rewards_eth, claims_processed, last_updated }
+  Aggiornato dal daemon _update_oracle_stats() dopo ogni claim finalizzato.
+
+
+════════════════════════════════════════════════════════════════════════
+  6. IL FRAUDSCORE — COME VIENE CALCOLATO
+════════════════════════════════════════════════════════════════════════
+
+Il FraudScore misura quanto è SOSPETTO un claim (più alto = più sospetto).
+Range: 0–130 punti. Soglie: <60 = approvato, >80 = rigettato.
+
+È composto da tre componenti (self_analyze_sandwich in oraclec.py):
+
+  ── A. PATTERN CHECK ──────────────────────────────────────────────────
+  Verifica tecnica del sandwich:
+    ✓ front, victim, back sono nello STESSO blocco
+    ✓ front.txIndex < victim.txIndex < back.txIndex
+    ✓ front.from == back.from (stesso bot)
+  Se il pattern è INVALIDO → FraudScore forzato a 120 (quasi certamente rigettato)
+  Se VALIDO → si continua con i punteggi sotto
+
+  ── B. SCORE TIER ──────────────────────────────────────────────────────
+  Basato sul livello del trader nel TierSystem:
+    Bronze   → +50 punti  (nuovi utenti, più sospettosi)
+    Silver   → +30 punti
+    Gold     → +15 punti
+    Platinum →  +0 punti  (utenti fidati, nessuna penalità)
+
+  ── C. SCORE CLAIM RATE ────────────────────────────────────────────────
+  Basato su quanti claim ha aperto il trader rispetto ai suoi swap:
+    claim_rate = claims / swaps_totali
+    ≥ 30% → +30 punti
+    ≥ 20% → +25 punti
+    ≥ 10% → +20 punti
+    ≥  6% → +15 punti
+    <  6% →  +0 punti
+  Nota: per i nuovi utenti (≤3 swap) viene usato (swaps+5) come
+  denominatore per evitare che 1 claim su 1 swap dia 100%.
+
+  ── D. SCORE NETWORK BFS ───────────────────────────────────────────────
+  BFS (Breadth-First Search) dalla vittima verso i bot in blacklist:
+    Distanza 1 → +50 punti
+    Distanza 2 → +30 punti
+    Distanza 3 → +15 punti
+    Distanza ≥4 → +max(5, 16-distanza) punti
+    Nessuna connessione → +0 punti
+
+  FORMULA FINALE:
+    FraudScore = score_tier + score_claim + score_network
+    (se pattern invalido → forzato a 120)
+    capped a max 130
+
+
+════════════════════════════════════════════════════════════════════════
+  7. IL PROCESSO DI CLAIM (dall'attacco al rimborso)
+════════════════════════════════════════════════════════════════════════
+
+Sequenza temporale completa:
+
+  T+0   Bot vede la tx vittima in mempool
+  T+0   Bot chiama _compute_sandwich_loss → ottiene out_no_attack_wei
+  T+0   Bot esegue frontrun (gasPrice vittima * 1.2)
+  T+0   Bot esegue backrun (gasPrice vittima * 0.9) — stesso blocco
+  T+0.5 Blocco minato: frontrun → vittima swap → backrun (ordine gas)
+  T+1   Bot legge AMM.Swap event della vittima → actual_amountOut
+        actual_loss = out_no_attack_wei - actual_amountOut
+        Scrive actual_loss in attack_log.json
+  T+2s  Trader rileva il sandwich leggendo attack_log
+  T+2s  Trader apre il claim: ins.submitClaim(swap_id, loss, front, victim, back)
+        Il contratto emette ClaimSubmitted
+        Il contratto assegna N oracle in modo pseudo-casuale
+  T+3s  Oracle rilevano ClaimSubmitted via event polling
+  T+4s  FASE COMMIT: ogni oracle calcola FraudScore e invia l'hash
+  T+5s  FASE REVEAL: ogni oracle rivela score + salt
+  T+6s  finalizeClaim() → calcola mediana → decide esito
+
+  SE MEDIANA < 60:
+    → PAYOUT: contratto invia MEVI al trader
+              importo = actual_loss * Fcov (50%, 70%, o 100%)
+    → ORACLE REWARD: ogni oracle riceve ETH
+    → Trader logga: rimborso: <payout_mevi> MEVI
+
+  SE MEDIANA > 80:
+    → RIGETTO, nessun payout
+    → Trader logga: rimborso: NO
+
+  SE 60 ≤ MEDIANA ≤ 80:
+    → CAPTCHA richiesto
+    → Se risolto → PAYOUT
+    → Trader logga: rimborso: <payout_mevi> MEVI
+
+
+════════════════════════════════════════════════════════════════════════
+  8. IL TIER SYSTEM (livelli utente)
+════════════════════════════════════════════════════════════════════════
+
+  Bronze   → utente nuovo (default per tutti)
+  Silver   → dopo un certo numero di swap senza abusi
+  Gold     → ulteriore upgrade
+  Platinum → utente trusted, deposita stake ETH aggiuntivo
+              tramite ins.requestPlatinumUpgrade(max_swap)
+
+Il Solvency Ratio (SR) del contratto:
+  SR = pool_MEVI / (pending_liabilities + expected_claims_7d)
+  Espresso come multiplo (es. 1.5x = pool copre 1.5 volte le passività attese)
+  Calcolato dal PremiumCalculator via getSolvencyRatio()
+
+
+════════════════════════════════════════════════════════════════════════
+  9. L'ORCHESTRATORE (scripts/orchestrator.py)
+════════════════════════════════════════════════════════════════════════
+
+L'orchestratore è il "regista" della simulazione.
+
+COSA FA:
+  1. Avvia Hardhat in una finestra separata
+  2. Esegue il deploy di tutti i contratti (scripts/deploy_all.js)
+  3. Applica i parametri di governance ai contratti on-chain
+  4. Finanzia trader e bot (USDC + MEVI + approval)
+  5. Avvia trader, bot, oracle e monitor in finestre CMD separate
+  6. Avvia thread daemon: auto_day_advance, amm_rebalancer, pool_logger
+
+DAEMON THREAD INTERNI (girano nel processo orchestratore):
+
+  auto_day_advance (opzionale):
+    Avanza la blockchain di 1 giorno ogni N minuti reali.
+    Serve a simulare claim che scadono, tier che cambiano, ecc.
+
+  amm_rebalancer (ogni 30s):
+    Chiama amm.rebalance() se le riserve si discostano >5% dai valori
+    iniziali. Riporta MEVI e USDC alle riserve originali del deploy.
+    Simula i liquidity provider che ribilanciano il pool.
+
+  pool_logger (ogni 120s):
+    Legge il bilancio MEVI del pool assicurativo (MEVInsurance) e
+    il bilancio ETH del pool oracle.
+    Scrive su simulation.log:
+      [HH:MM:SS][ POOL] POOL UPDATE | mevi=<X> MEVI | eth=<Y> ETH
+    Questi snapshot vengono poi letti dal report economico per mostrare
+    l'evoluzione del pool nel tempo.
+
+PARAMETRI DI GOVERNANCE (Tabella 8):
+  nOracle (7)             = quanti oracle per claim
+  thetaReject (80)        = soglia rigetto FraudScore
+  thetaApprove (60)       = soglia approvazione FraudScore
+  patt (1000 bps=10%)     = prob. attacco nella formula premio
+  lPercent (200=2%)       = perdita media nella formula premio
+  eFNR (2000=20%)         = tasso falsi negativi oracle
+  mBase (2000=20%)        = margine base nella formula premio
+  srSafe (15000=1.5x)     = solvency ratio sicuro
+  srCritical (13000=1.3x) = solvency ratio critico
+
+
+════════════════════════════════════════════════════════════════════════
+  10. IL MONITOR E IL POOL LOGGER (scripts/monitor.py)
+════════════════════════════════════════════════════════════════════════
+
+Il monitor si avvia insieme alla simulazione e fa tre cose:
+  A) Mostra un dashboard live in console (via rich library)
+  B) Rifornisce l'AMM automaticamente se le riserve scendono troppo
+  C) Genera il report economico su Ctrl+C (generate_economic_report)
+
+── DASHBOARD LIVE ────────────────────────────────────────────────────
+
+  Il monitor legge on-chain ogni poll_interval secondi:
+    - balanceOf(MEVInsurance) → pool MEVI
+    - getPoolEthBalance()     → pool ETH oracle
+    - stake di ogni oracle attivo
+    - getSolvencyRatio()      → SR live
+    - Nuovi eventi (SwapInsured, PayoutIssued, ecc.)
+  Mostra tutto in una tabella rich aggiornata in tempo reale.
+
+── AMM AUTO-REFILL (_check_and_refill_amm) ───────────────────────────
+
+  Chiamato ad ogni ciclo del dashboard (ogni ~2s).
+  Legge initReserveA() e initReserveB() dal contratto AMM
+  (i valori impostati al PRIMO addLiquidity del deploy, corrispondono
+  ai parametri amm_mevi / amm_usdc scelti dall'utente nell'orchestratore).
+
+  THRESHOLD = initReserveA / 10  (10% del valore iniziale)
+
+  Se reserveA < THRESHOLD:
+    add_mevi = initReserveA - reserveA   (deficit MEVI)
+    add_usdc = initReserveB - reserveB   (deficit USDC, se presente)
+    Approva MEVI e USDC al contratto AMM
+    Chiama amm.addLiquidity(add_mevi, add_usdc)
+    → Ripristina esattamente alle riserve iniziali del deploy
+
+  Logga su simulation.log:
+    [HH:MM:SS][  AMM] AMM REFILL | mevi_prima=X → mevi_dopo=Y MEVI | usdc_pool=Z USDC
+
+  PERCHÉ USA initReserveA E NON UN VALORE HARDCODED:
+    Così se l'utente configura il pool a 5000 MEVI, il refill porta a
+    5000. Se configura a 100000 MEVI, porta a 100000. Automatico.
+
+── POOL LOGGER (orchestrator.py → pool_logger thread) ────────────────
+
+  NB: il pool logger NON gira dentro monitor.py ma nel processo
+  orchestratore (thread daemon start_pool_logger).
+  Ogni 120 secondi legge:
+    - token.balanceOf(MEVInsurance) → MEVI del pool assicurativo
+    - ins.getPoolEthBalance()       → ETH del fondo oracle
+  Scrive su simulation.log:
+    [HH:MM:SS][ POOL] POOL UPDATE | mevi=<X> MEVI | eth=<Y> ETH
+
+  Il monitor non interagisce con questo thread; la riga viene scritta
+  direttamente nel log dall'orchestratore.
+
+
+════════════════════════════════════════════════════════════════════════
+  11. IL REPORT ECONOMICO — STRUTTURA E VALORI
+════════════════════════════════════════════════════════════════════════
+
+generate_economic_report() in monitor.py.
+Viene chiamata quando si preme Ctrl+C sul monitor oppure quando
+l'orchestratore genera il report finale.
+
+FONTE DATI: legge esclusivamente
+  - logs/simulation.log   (tutte le righe della simulazione)
+  - config/oracle_stats.json  (aggregati oracle)
+NON fa query on-chain: tutto viene estratto dalle righe di testo.
+
+── PARSING DI simulation.log ─────────────────────────────────────────
+
+  Righe [  SWAP]:
+    Regex che estrae: timestamp, indirizzo trader, USDC importo,
+    livello protezione, premio (se presente), MEVI ricevuti,
+    flag attacco, perdita (se attaccato), rimborso (se presente).
+
+    Valori accumulati per trader:
+      tot_mevi     = Σ ricevuti  (tutto il MEVI ricevuto dagli swap)
+      tot_attacked = Σ perdita   (perdita totale da attacchi sandwich)
+      tot_premio   = Σ premio    (premi assicurativi pagati)
+      tot_rimborso = Σ rimborso  (MEVI ricevuti come payout claim)
+
+  Righe [ POOL]:
+    Regex che estrae: timestamp, mevi_pool, eth_pool.
+    Questi snapshot vengono mostrati nella tabella cronologica.
+
+── STRUTTURA DEL REPORT ──────────────────────────────────────────────
+
+  SEZIONE 1 — EVOLUZIONE POOL (ogni 2 min)
+    Tabella con una riga per ogni snapshot [ POOL]:
+      Ora | MEVI Pool | ETH Pool
+    Mostra come cambiano le riserve assicurative nel tempo.
+    Se non ci sono righe [ POOL] (simulazione < 2 min), questa
+    sezione non appare.
+
+  SEZIONE 2 — SOMMARIO TRADER
+    Una riga per ogni trader visto nei log, con:
+      Indirizzo (22 char) | Prot | MEVI tot | Attaccato | Premio | Rimborso
+
+    Valori:
+      Prot       = ultimo livello di protezione visto per quel trader
+                   (HIGH / MEDIUM / LOW / NESSUNA)
+      MEVI tot   = Σ MEVI ricevuti da TUTTI gli swap (inclusi quelli non attaccati)
+      Attaccato  = Σ perdita MEVI da attacchi sandwich (0 se mai attaccato)
+      Premio     = Σ MEVI pagati come premio assicurativo (0 se non assicurato)
+      Rimborso   = Σ MEVI ricevuti come payout dal protocollo (0 se non ci sono stati)
+
+    NOTA: "Prot: NESSUNA" indica trader non assicurato.
+    NOTA: Attaccato=0 non significa che non sia mai stato in pericolo;
+          significa che nel log non compare nessuna riga con perdita>0.
+
+  SEZIONE 3 — DETTAGLIO TX PER TRADER
+    Per ogni trader, una riga per OGNI swap eseguito:
+      HH:MM:SS  USDC → MEVI | [premio: X] | att: SI/NO [perdita: P] [rimborso: R]
+
+    Valori per riga:
+      USDC        = importo dello swap in USDC
+      MEVI        = MEVI effettivamente ricevuti (dal bilancio diff)
+      premio      = MEVI pagati per l'assicurazione (solo se prot != NESSUNA)
+      att: SI/NO  = se il bot ha attaccato questo swap specifico
+      perdita     = loss_sandwich_mevi da attack_log (perdita reale post-sandwich)
+                    = out_no_attack - amountOut_effettivo (calcolato dal bot)
+      rimborso    = payout ricevuto dal protocollo (se claim approvato)
+                    oppure "NON ASSICURATO" (se trader non coperto)
+                    oppure "NO" (se claim rigettato)
+
+  SEZIONE 4 — ORACLE STATS
+    Dati letti da config/oracle_stats.json:
+      Rewards: N pagamenti, tot X ETH   (N = numero claim finalizzati con reward)
+      Claims processati: M              (M = claim totali finalizzati)
+      Ultimo update: HH:MM:SS
+
+
+── COME "PERDITA" E "RIMBORSO" VENGONO CALCOLATI ─────────────────────
+
+  PERDITA (in ogni riga SWAP attaccata):
+    1. Il bot legge reserveA, reserveB PRIMA del frontrun
+    2. Calcola out_no_attack = reserveA - k//(reserveB + victim_wei)
+    3. Esegue il sandwich
+    4. Dopo il blocco: cerca l'evento AMM.Swap della vittima → legge amountOut
+    5. actual_loss = out_no_attack - amountOut
+    6. Scrive actual_loss in attack_log.json["loss_sandwich_mevi"]
+    7. Il trader legge attack_log → scrive perdita=actual_loss nel log
+
+    INTERPRETAZIONE: è la differenza tra ciò che la vittima avrebbe
+    ricevuto SENZA attacco e ciò che ha REALMENTE ricevuto. Include
+    l'effetto di qualsiasi swap concorrente nello stesso blocco.
+
+  RIMBORSO (solo se assicurato e claim approvato):
+    = il payout effettivo ricevuto dal contratto MEVInsurance
+    = min(actual_loss * Fcov, pool_disponibile)
+    In teoria: Fcov=100% (HIGH) → rimborso ≈ perdita
+    In pratica: può differire se il pool ha poco MEVI
+
+  PREMIO:
+    = ins.getPremiumEstimate(val, livello) al momento dello swap
+    = calcolato dal PremiumCalculator on-chain secondo la formula P
+    Il trader lo paga PRIMA dello swap (pre-dedotto dal bilancio MEVI)
+
+
+════════════════════════════════════════════════════════════════════════
+  12. COME LEGGERE I NUMERI DEL REPORT
+════════════════════════════════════════════════════════════════════════
+
+── EVOLUZIONE POOL ───────────────────────────────────────────────────
+
+  Rappresenta la salute finanziaria del protocollo nel tempo.
+  MEVI Pool = fondi disponibili per pagare i rimborsi futuri.
+  ETH Pool  = fondi per pagare i reward agli oracle.
+
+  Se MEVI Pool scende rapidamente → troppi payout o pochi premi.
+  Se ETH Pool scende → molti claim, molti reward oracle.
+  Se vedi salti bruschi verso l'alto → AMM refill eseguito dal monitor.
+
+── SOMMARIO TRADER ────────────────────────────────────────────────────
+
+  Costo netto assicurazione per trader assicurato:
+    = Premio - Rimborso
+    Se negativo → il trader ha incassato più di quanto ha pagato.
+    Se positivo → l'assicurazione è "costata" (nessun rimborso o rimborso parziale).
+
+  Efficacia copertura:
+    = Rimborso / Attaccato
+    1.0 = rimborso completo della perdita (livello HIGH con claim approvato)
+    0.0 = nessun rimborso (claim rigettato o trader non assicurato)
+
+  Trader non assicurati (prot: NESSUNA):
+    Premio = 0   (non pagano nulla)
+    Rimborso = 0 (non ricevono nulla)
+    Attaccato > 0 → perdita secca, nessuna copertura
+
+── DETTAGLIO TX ───────────────────────────────────────────────────────
+
+  att: SI + perdita > 0 + rimborso > 0
+    → Attacco andato a buon fine, claim approvato, rimborso ricevuto.
+
+  att: SI + perdita > 0 + rimborso: NON ASSICURATO
+    → Attacco subito ma nessuna copertura (trader naked).
+
+  att: SI + perdita > 0 + rimborso: NO
+    → Attacco subito, claim rigettato dagli oracle.
+
+  att: NO
+    → Nessun attacco su questo swap (o swap non nella finestra di osservazione).
+
+── ORACLE STATS ───────────────────────────────────────────────────────
+
+  Rewards totali ETH = quanto il protocollo ha speso per pagare gli oracle.
+  Claims processati  = quante volte gli oracle hanno lavorato.
+  Costo per claim    = Rewards ETH / Claims ≈ nOracle * rewardPerOracle
+
+── INCOERENZE ATTESE ─────────────────────────────────────────────────
+
+  "stima" vs "ricevuti" nel log raw:
+    stima viene calcolata PRE-frontrun; ricevuti è POST-frontrun.
+    La differenza (stima - ricevuti) NON è la perdita da attacco,
+    può includere effetti di swap concorrenti e variazioni di pool.
+    → Usa sempre "perdita" (da attack_log) per misurare l'impatto sandwich.
+
+  tot_mevi include tutti gli swap, anche quelli senza attacco.
+  Non è una misura di perdita ma di volume totale MEVI ricevuti.
+
+  Rimborso leggermente > perdita (es. 3.0623 vs 3.0523):
+    Normale: il contratto aggiunge un piccolo gas refund al payout.
+
+
+════════════════════════════════════════════════════════════════════════
+  13. I FILE DI CONFIGURAZIONE E LOG
+════════════════════════════════════════════════════════════════════════
+
+config/deployed_addresses.json
+  → Indirizzi on-chain di tutti i contratti deployati.
+    Scritto da scripts/deploy_all.js dopo il deploy.
+    Letto da tutti gli altri script per trovare i contratti.
+
+config/actors.json
+  → { oracles: [...], bots: [...], traders: [...], deployer: "0x..." }
+    Scritto dall'orchestratore durante il setup.
+    Usato dal bot per non attaccare i propri colleghi.
+
+config/deploy_params.json
+  → { amm_mevi, amm_usdc, pool_mevi, pool_eth }
+    Valori scelti dall'utente prima del deploy.
+    amm_mevi / amm_usdc = riserve iniziali MockAMM (anche target del refill)
+    pool_mevi = MEVI iniziali nel pool assicurativo
+    pool_eth  = ETH iniziali nel fondo oracle
+
+config/attacked_txs.json
+  → Lista di hash già attaccati.
+    Scritto dal bot per non attaccare due volte la stessa tx.
+
+config/victims.json
+  → { tx_hash: victim_address }
+    Scritto dal bot. Letto dal trader per sapere se è stato attaccato.
+
+config/attack_log.json
+  → { tx_hash: { victim, swap_amount_wei, is_insured, bot_profit_usdc,
+                 loss_sandwich_mevi, loss_pct, timestamp, bot,
+                 frontrun_tx, backrun_tx } }
+    loss_sandwich_mevi = out_no_attack - amountOut_effettivo_dalla_Swap_event
+    Questo è il valore che appare come "perdita" nel report.
+
+config/oracle_stats.json
+  → { oracle_rewards_count, oracle_rewards_eth, claims_processed, last_updated }
+    Aggiornato da oraclec.py dopo ogni claim finalizzato.
+    Letto dal generate_economic_report() per la sezione ORACLE STATS.
+
+config/naked_stats.json
+  → { naked_seen: N, insured_seen: M }
+    Aggiornato dal bot per ogni swap visto (anche non attaccato).
+
+config/sim_params.json
+  → Parametri salvati dall'orchestratore per riferimento.
+
+logs/simulation.log
+  → Log testuale di tutto ciò che succede. Formato righe:
+    [HH:MM:SS][CATEGORIA] messaggio
+
+  Categorie usate:
+    [  SWAP]  → ogni swap eseguito da un trader (assicurato o no)
+    [ATTACK]  → ogni attacco sandwich eseguito dal bot
+    [   BOT]  → messaggi di stato del bot MEV
+    [ POOL]   → snapshot pool ogni 2 minuti (da orchestrator pool_logger)
+    [  AMM]   → refill AMM eseguito dal monitor
+    [SYSTEM]  → messaggi di sistema (connessione, startup)
+    [CLAIM]   → eventi claim (da oraclec.py)
+    [ORC-N]   → messaggi del singolo oracle N
+
+logs/economic_report_YYYYMMDD_HHMMSS.txt
+  → Report generato da generate_economic_report().
+
+oracle_test_state.json
+  → { "bugs": { "0xaddr": deviation }, "jury_probs": {...} }
+    Usato dall'orchestratore per simulare oracle corrotti o con
+    probabilità di voto configurate (per test slashing).
+
+
+════════════════════════════════════════════════════════════════════════
+  GLOSSARIO
+════════════════════════════════════════════════════════════════════════
+
+Sandwich attack   Attacco MEV: il bot si inserisce prima (frontrun)
+                  e dopo (backrun) lo swap della vittima, causando
+                  slippage aggiuntivo e una perdita di MEVI.
+
+AMM (x*y=k)       Automated Market Maker senza fee.
+                  Formula: amountOut = reserveOut - k/(reserveIn + amountIn)
+                  Il prezzo cambia in base alla dimensione dello swap.
+
+out_no_attack     MEVI atteso dalla vittima SE nessun frontrun fosse
+                  avvenuto. Calcolato con le reserve PRIMA del frontrun.
+
+actual_amountOut  MEVI effettivamente ricevuto dalla vittima, letto
+                  dall'evento AMM.Swap on-chain.
+
+loss_sandwich     = out_no_attack - actual_amountOut.
+                  La perdita reale causata dal sandwich. Include
+                  l'effetto di tutti gli swap concorrenti nello stesso blocco.
+
+Frontrun          Tx inviata con gas più alto per essere eseguita
+                  PRIMA di un'altra transazione target.
+
+Mempool           Pool di transazioni in attesa di essere minate.
+
+Commit-reveal     Protocollo crittografico anti-collusione:
+                  Prima tutti inviano hash(voto), poi tutti rivelano.
+
+FraudScore        Punteggio di sospetto (0-130). Basso = legittimo.
+                  Mediana dei FraudScore degli oracle → decisione.
+
+Solvency Ratio    Pool MEVI / passività attese.
+                  SR > 1.5x = sicuro, SR < 1.3x = critico.
+
+Wei               Unità minima (1 MEVI = 10^18 wei).
+                  Tutti i valori on-chain sono in wei; il report
+                  divide per 10^18 per mostrare valori leggibili.
+
+BFS               Breadth-First Search: algoritmo su grafi.
+                  Usato per misurare distanza trader ↔ bot noti.
+
+Basis point (bps) 1 bps = 0.01% → 10000 bps = 100%.
+                  Es: patt = 500 bps = 5% probabilità di attacco.
+
+initReserveA/B    Riserve iniziali dell'AMM (impostate al primo
+                  addLiquidity del deploy). Sono il target del refill.
+
+════════════════════════════════════════════════════════════════════════

@@ -1,11 +1,9 @@
 {
   "name": "simulazioni",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
   "directories": {
-    "doc": "docs",
-    "test": "tests"
+    "test": "test"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -24,5 +22,6 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "hardhat": "^2.28.6"
-  }
+  },
+  "description": ""
 }

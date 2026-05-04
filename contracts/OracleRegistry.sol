@@ -5,75 +5,29 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./libraries/DataTypes.sol";
 
-/**
- * @title OracleRegistry
- * @dev Manages oracle registration, activation, staking, watchlist, and selection.
- *
- * Lifecycle: register (Pending) -> activate (Active) -> withdraw (cooldown) -> exit
- *
- * Stake scaling: BaseStake * log2(1 + numActiveOracles)
- * Watchlist: after kwatchlist deviations >= deltaWatchlist points
- * Periodic reset: every Treset for active oracles
- * Selection: pseudo-random from active pool, excludes watchlisted for jury duty
- */
 contract OracleRegistry is Ownable, ReentrancyGuard {
     using DataTypes for *;
 
     constructor() Ownable(msg.sender) {}
 
-    // -------------------------------------------------------
-    //  Protocol Parameters (configurable, initialized to defaults from Table 8)
-    // -------------------------------------------------------
-
-    /// @dev Base stake required for first oracle (in wei)
     uint256 public baseStake = 0.1 ether;
-
-    /// @dev Activation delay after registration
     uint256 public tActivation = 7 days;
-
-    /// @dev Cooldown period before stake withdrawal
     uint256 public tCooldown = 30 days;
-
-    /// @dev Number of deviations to trigger watchlist
     uint256 public kWatchlist = 2;
-
-    /// @dev Minimum deviation to count as a watchlist strike (in fraud score points)
     uint256 public deltaWatchlist = 10;
-
-    /// @dev Periodic reset interval for deviation scores
     uint256 public tReset = 30 days;
-
-    /// @dev Reward per claim evaluation (in wei)
     uint256 public rClaim = 0.002 ether;
-
-    /// @dev Watchlist reward penalty in basis points (e.g., 5000 = 50%)
     uint256 public watchlistPenaltyBps = 5000;
-
-    /// @dev Minimum observation period on watchlist before exit (C11)
     uint256 public tWatchlist = 90 days;
 
-    // -------------------------------------------------------
-    //  State
-    // -------------------------------------------------------
-
-    /// @dev Oracle data by address
     mapping(address => DataTypes.OracleInfo) public oracleData;
-
-    /// @dev List of all registered oracle addresses (for iteration and selection)
     address[] public oracleList;
-
-    /// @dev Quick lookup: is address in oracleList
     mapping(address => bool) public isOracle;
-
-    /// @dev Count of currently active oracles
     uint256 public activeOracleCount;
-
-    /// @dev Authorized callers that can call restricted functions (e.g. MEVInsurance, SlashingSystem)
     mapping(address => bool) public authorizedCallers;
 
-    // -------------------------------------------------------
-    //  Events
-    // -------------------------------------------------------
+    address[] public watchlistOracles;
+    mapping(address => bool) public isInWatchlist;
 
     event OracleRegistered(address indexed oracle, uint256 stake);
     event OracleActivated(address indexed oracle);
@@ -86,12 +40,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
     event OracleSlashed(address indexed oracle, uint256 slashAmount);
     event OracleExpelled(address indexed oracle);
     event OracleReintegrated(address indexed oracle, uint256 newStake);
-    event OracleRewarded(address indexed oracle, uint256 amount);
     event ParameterUpdated(string param, uint256 value);
-
-    // -------------------------------------------------------
-    //  Modifiers
-    // -------------------------------------------------------
 
     modifier onlyActiveOracle() {
         require(
@@ -109,15 +58,6 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         _;
     }
 
-    // -------------------------------------------------------
-    //  Oracle Lifecycle
-    // -------------------------------------------------------
-
-    /**
-     * @dev Register as an oracle by staking ETH.
-     * Minimum stake scales logarithmically: baseStake * log2(1 + activeOracleCount).
-     * Initial status = Pending.
-     */
     function registerOracle() external payable nonReentrant {
         require(!isOracle[msg.sender], "Already registered");
         require(oracleData[msg.sender].status != DataTypes.OracleStatus.Expelled, "Expelled oracle");
@@ -144,10 +84,6 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         emit OracleRegistered(msg.sender, msg.value);
     }
 
-    /**
-     * @dev Activate oracle after the activation delay has passed.
-     * Transitions from Pending to Active.
-     */
     function activateOracle() external {
         DataTypes.OracleInfo storage info = oracleData[msg.sender];
         require(info.status == DataTypes.OracleStatus.Pending, "Not in Pending status");
@@ -164,10 +100,6 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         emit OracleActivated(msg.sender);
     }
 
-    /**
-     * @dev Request stake withdrawal. Starts the cooldown timer.
-     * Oracle must be Active or Watchlisted.
-     */
     function withdrawOracle() external {
         DataTypes.OracleInfo storage info = oracleData[msg.sender];
         require(
@@ -178,13 +110,9 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         require(info.withdrawRequestTime == 0, "Withdrawal already requested");
 
         info.withdrawRequestTime = block.timestamp;
-
         emit OracleWithdrawRequested(msg.sender, block.timestamp + tCooldown);
     }
 
-    /**
-     * @dev Complete withdrawal after cooldown. Returns staked ETH.
-     */
     function completeWithdrawal() external nonReentrant {
         DataTypes.OracleInfo storage info = oracleData[msg.sender];
         require(info.withdrawRequestTime > 0, "No withdrawal requested");
@@ -195,11 +123,12 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
 
         uint256 stakeToReturn = info.stake;
 
-        // Decrease active count if oracle was active/watchlisted
         if (info.status == DataTypes.OracleStatus.Active ||
             info.status == DataTypes.OracleStatus.Watchlisted) {
             activeOracleCount--;
         }
+
+        if (isInWatchlist[msg.sender]) _removeFromWatchlist(msg.sender);
 
         info.stake = 0;
         info.status = DataTypes.OracleStatus.Inactive;
@@ -211,16 +140,6 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         emit OracleWithdrawn(msg.sender, stakeToReturn);
     }
 
-    // -------------------------------------------------------
-    //  Deviation & Watchlist Management
-    // -------------------------------------------------------
-
-    /**
-     * @dev Record a deviation for an oracle. Called by ClaimManager
-     * when an oracle's score deviates from the median.
-     * @param _oracle Address of the oracle
-     * @param _absoluteDeviation Absolute difference between oracle's score and median
-     */
     function recordDeviation(address _oracle, uint256 _absoluteDeviation) external onlyOwnerOrAuthorized {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(
@@ -229,28 +148,22 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             "Oracle not active"
         );
 
-        // Cumulative sum of absolute deviations
         info.deviationScore += _absoluteDeviation;
         emit OracleDeviationRecorded(_oracle, info.deviationScore);
 
-        // Count as a watchlist strike if deviation >= deltaWatchlist
         if (_absoluteDeviation >= deltaWatchlist) {
             info.watchlistStrikes++;
 
-            // Move to watchlist if strikes threshold reached
             if (info.watchlistStrikes >= kWatchlist &&
                 info.status == DataTypes.OracleStatus.Active) {
                 info.status = DataTypes.OracleStatus.Watchlisted;
+                _addToWatchlist(_oracle);
                 info.watchlistPosition = block.timestamp;
                 emit OracleWatchlisted(_oracle, info.deviationScore);
             }
         }
     }
 
-    /**
-     * @dev Reset deviation score for an oracle. Callable after Treset period.
-     * @param _oracle Address of the oracle to reset
-     */
     function resetDeviationScore(address _oracle) external {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(
@@ -263,7 +176,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             "Reset period not elapsed"
         );
 
-        // C11: Watchlisted oracles must observe tWatchlist minimum before exit
+        // C11: watchlisted oracles must observe tWatchlist minimum before exit
         if (info.status == DataTypes.OracleStatus.Watchlisted) {
             require(
                 block.timestamp >= info.watchlistPosition + tWatchlist,
@@ -275,67 +188,62 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         info.watchlistStrikes = 0;
         info.lastResetTime = block.timestamp;
 
-        // Remove from watchlist if currently watchlisted
         if (info.status == DataTypes.OracleStatus.Watchlisted) {
             info.status = DataTypes.OracleStatus.Active;
+            _removeFromWatchlist(_oracle);
             info.watchlistPosition = 0;
         }
 
         emit OracleScoreReset(_oracle);
     }
 
-    // -------------------------------------------------------
-    //  Slashing (called by SlashingSystem)
-    // -------------------------------------------------------
-
-    /**
-     * @dev Penalize an oracle for inactivity (not revealing). Deducts a small
-     * amount from stake without changing oracle status (C10).
-     * @param _oracle Oracle to penalize
-     * @param _amount Amount to deduct from stake
-     */
-    function penalizeInactivity(address _oracle, uint256 _amount) external onlyOwnerOrAuthorized nonReentrant {
+    function penalizeInactivity(address _oracle, uint256 _amount, address _recipient) external onlyOwnerOrAuthorized nonReentrant {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(
             info.status == DataTypes.OracleStatus.Active ||
             info.status == DataTypes.OracleStatus.Watchlisted,
             "Oracle not active"
         );
+        require(_recipient != address(0), "Bad recipient");
 
         if (_amount > info.stake) {
-            _amount = info.stake; // Cap at available stake
+            _amount = info.stake;
         }
         info.stake -= _amount;
 
         emit OracleInactivityPenalized(_oracle, _amount);
+
+        if (_amount > 0) {
+            (bool sent, ) = _recipient.call{value: _amount}("");
+            require(sent, "Penalty transfer failed");
+        }
     }
 
-    /**
-     * @dev Slash an oracle's stake. Called by owner (SlashingSystem contract).
-     * @param _oracle Oracle to slash
-     * @param _amount Amount to slash from stake
-     */
-    function slashOracle(address _oracle, uint256 _amount) external onlyOwnerOrAuthorized nonReentrant {
+    function slashOracle(address _oracle, uint256 _amount, address _recipient) external onlyOwnerOrAuthorized nonReentrant {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         require(info.stake >= _amount, "Slash exceeds stake");
+        require(_recipient != address(0), "Bad recipient");
 
         info.stake -= _amount;
-        info.status = DataTypes.OracleStatus.Slashed;
 
         if (info.status == DataTypes.OracleStatus.Active ||
             info.status == DataTypes.OracleStatus.Watchlisted) {
             activeOracleCount--;
         }
 
+        if (isInWatchlist[_oracle]) _removeFromWatchlist(_oracle);
+        info.status = DataTypes.OracleStatus.Slashed;
+
         emit OracleSlashed(_oracle, _amount);
+
+        (bool sent, ) = _recipient.call{value: _amount}("");
+        require(sent, "Slash transfer failed");
     }
 
-    /**
-     * @dev Expel an oracle permanently. Called by owner (SlashingSystem).
-     * @param _oracle Oracle to expel
-     */
     function expelOracle(address _oracle) external onlyOwnerOrAuthorized {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
+
+        if (isInWatchlist[_oracle]) _removeFromWatchlist(_oracle);
 
         if (info.status == DataTypes.OracleStatus.Active ||
             info.status == DataTypes.OracleStatus.Watchlisted) {
@@ -343,48 +251,33 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         }
 
         info.status = DataTypes.OracleStatus.Expelled;
-
         emit OracleExpelled(_oracle);
     }
 
-    /**
-     * @dev Allow a slashed oracle to reintegrate by paying slash debt + new full stake.
-     */
     function reintegrateOracle() external payable nonReentrant {
         DataTypes.OracleInfo storage info = oracleData[msg.sender];
         require(info.status == DataTypes.OracleStatus.Slashed, "Not slashed");
 
         uint256 minStake = getMinimumStake();
-        require(msg.value >= minStake, "Insufficient new stake");
+        require(msg.value + info.stake >= minStake * 2, "Insufficient integration for 2x stake");
 
-        info.stake = msg.value;
-        info.status = DataTypes.OracleStatus.Pending;
-        info.registrationTime = block.timestamp;
-        info.activationTime = 0;
+        info.stake += msg.value;
+        info.status = DataTypes.OracleStatus.Active;
+        info.activationTime = block.timestamp + 7 days;
         info.deviationScore = 0;
         info.watchlistPosition = 0;
         info.lastResetTime = block.timestamp;
         info.withdrawRequestTime = 0;
 
-        emit OracleReintegrated(msg.sender, msg.value);
+        emit OracleReintegrated(msg.sender, info.stake);
     }
 
-    // -------------------------------------------------------
-    //  Oracle Selection
-    // -------------------------------------------------------
-
-    /**
-     * @dev Select n active oracles pseudo-randomly. Excludes watchlisted oracles.
-     * @param _seed Random seed (e.g., blockhash-based)
-     * @param _n Number of oracles to select
-     * @return selected Array of selected oracle addresses
-     */
+    // Fisher-Yates selection from Active-only pool (excludes watchlisted)
     function selectOracles(uint256 _seed, uint256 _n)
         external
         view
         returns (address[] memory selected)
     {
-        // Build pool of eligible oracles (Active only, not Watchlisted)
         address[] memory eligible = new address[](oracleList.length);
         uint256 eligibleCount = 0;
 
@@ -403,58 +296,46 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         uint256 remaining = eligibleCount;
 
         for (uint256 i = 0; i < _n; i++) {
-            // Fisher-Yates inspired selection
             uint256 idx = uint256(keccak256(abi.encodePacked(_seed, i))) % remaining;
             selected[i] = eligible[idx];
-            // Swap selected with last eligible to avoid re-selection
             eligible[idx] = eligible[remaining - 1];
             remaining--;
         }
     }
 
-    // -------------------------------------------------------
-    //  Reward Distribution
-    // -------------------------------------------------------
-
-    /**
-     * @dev Pay reward to an oracle for claim evaluation. Watchlisted oracles
-     * receive a penalized reward. Called by owner (ClaimManager).
-     * @param _oracle Oracle to reward
-     */
-    function rewardOracle(address _oracle) external onlyOwnerOrAuthorized nonReentrant {
-        DataTypes.OracleInfo storage info = oracleData[_oracle];
-        require(
-            info.status == DataTypes.OracleStatus.Active ||
-            info.status == DataTypes.OracleStatus.Watchlisted,
-            "Oracle not eligible for reward"
-        );
-
-        info.claimsEvaluated++;
-
-        uint256 reward = rClaim;
-        if (info.status == DataTypes.OracleStatus.Watchlisted) {
-            // Penalized reward: reward * (1 - penalty%)
-            reward = (reward * (10000 - watchlistPenaltyBps)) / 10000;
+    function _addToWatchlist(address _oracle) internal {
+        if (!isInWatchlist[_oracle]) {
+            isInWatchlist[_oracle] = true;
+            watchlistOracles.push(_oracle);
         }
-
-        // Reward paid from contract balance
-        require(address(this).balance >= reward, "Insufficient reward funds");
-
-        (bool sent, ) = _oracle.call{value: reward}("");
-        require(sent, "Reward transfer failed");
-
-        emit OracleRewarded(_oracle, reward);
     }
 
-    // -------------------------------------------------------
-    //  View Functions
-    // -------------------------------------------------------
+    function _removeFromWatchlist(address _oracle) internal {
+        if (!isInWatchlist[_oracle]) return;
+        isInWatchlist[_oracle] = false;
+        uint256 len = watchlistOracles.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (watchlistOracles[i] == _oracle) {
+                watchlistOracles[i] = watchlistOracles[len - 1];
+                watchlistOracles.pop();
+                break;
+            }
+        }
+    }
 
-    /**
-     * @dev Calculate minimum stake with logarithmic scaling.
-     * minStake = baseStake * log2(1 + activeOracleCount)
-     * For 0 active oracles: returns baseStake (log2(1) = 0, so we use max(1, ...))
-     */
+    function _getWatchlistPosition(address _oracle) internal view returns (uint256) {
+        if (!isInWatchlist[_oracle]) return 0;
+        uint256 myScore = oracleData[_oracle].deviationScore;
+        uint256 pos = 1;
+        for (uint256 i = 0; i < watchlistOracles.length; i++) {
+            if (watchlistOracles[i] != _oracle && oracleData[watchlistOracles[i]].deviationScore > myScore) {
+                pos++;
+            }
+        }
+        return pos;
+    }
+
+    // minStake = baseStake * log2(1 + activeOracleCount); returns baseStake when count=0
     function getMinimumStake() public view returns (uint256) {
         if (activeOracleCount == 0) {
             return baseStake;
@@ -464,9 +345,6 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         return baseStake * logValue;
     }
 
-    /**
-     * @dev Get oracle info for an address.
-     */
     function getOracleInfo(address _oracle) external view returns (
         uint256 stake,
         DataTypes.OracleStatus status,
@@ -488,33 +366,35 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         );
     }
 
-    /**
-     * @dev Get total number of registered oracles.
-     */
     function getOracleCount() external view returns (uint256) {
         return oracleList.length;
     }
 
-    /**
-     * @dev Check if an oracle is eligible for claim evaluation.
-     */
     function isEligible(address _oracle) external view returns (bool) {
         DataTypes.OracleInfo storage info = oracleData[_oracle];
         return info.status == DataTypes.OracleStatus.Active &&
                info.withdrawRequestTime == 0;
     }
 
-    // -------------------------------------------------------
-    //  Authorization
-    // -------------------------------------------------------
+    function getWatchlist() external view returns (address[] memory) {
+        return watchlistOracles;
+    }
+
+    function getWatchlistCount() external view returns (uint256) {
+        return watchlistOracles.length;
+    }
+
+    function getRewardPercentBps(address _oracle) external view returns (uint256) {
+        if (oracleData[_oracle].status != DataTypes.OracleStatus.Watchlisted) return 10000;
+        uint256 pos = _getWatchlistPosition(_oracle);
+        if (pos == 0) return 10000;
+        if (pos <= 99) return 5000 + ((pos - 1) * 4000) / 99;
+        return 9000;
+    }
 
     function setAuthorizedCaller(address _caller, bool _authorized) external onlyOwner {
         authorizedCallers[_caller] = _authorized;
     }
-
-    // -------------------------------------------------------
-    //  Parameter Setters (owner only)
-    // -------------------------------------------------------
 
     function setBaseStake(uint256 _val) external onlyOwner {
         baseStake = _val;
@@ -551,13 +431,6 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         emit ParameterUpdated("rClaim", _val);
     }
 
-    // -------------------------------------------------------
-    //  Internal Utilities
-    // -------------------------------------------------------
-
-    /**
-     * @dev Integer log base 2 (floor). Returns 0 for input 0 or 1.
-     */
     function _log2(uint256 x) internal pure returns (uint256 result) {
         if (x <= 1) return 0;
         result = 0;
@@ -566,7 +439,4 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
             result++;
         }
     }
-
-    /// @dev Allow contract to receive ETH (for reward funding)
-    receive() external payable {}
 }

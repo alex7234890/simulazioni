@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx hardhat:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/oracle.py'\\).read\\(\\)\\); print\\('oracle.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/monitor.py'\\).read\\(\\)\\); print\\('monitor.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/oraclec.py'\\).read\\(\\)\\); print\\('oraclec.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/oracle.py', encoding='utf-8'\\).read\\(\\)\\); print\\('oracle.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/monitor.py', encoding='utf-8'\\).read\\(\\)\\); print\\('monitor.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('scripts/oraclec.py', encoding='utf-8'\\).read\\(\\)\\); print\\('oraclec.py: OK'\\)\")",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(grep *)",
+      "Bash(wc -l \"C:\\\\Users\\\\aless\\\\Documents\\\\simulazioni\\\\scripts\"/*.py \"C:\\\\Users\\\\aless\\\\Documents\\\\simulazioni\\\\scripts\"/*.js)",
+      "Bash(ls *)",
+      "Skill(statusline)"
+    ]
+  }
+}
