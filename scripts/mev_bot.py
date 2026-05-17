@@ -12,6 +12,8 @@ _ROOT = Path(__file__).parent.parent
 _ATTACKED_FILE  = _ROOT / "config" / "attacked_txs.json"
 _VICTIMS_FILE   = _ROOT / "config" / "victims.json"
 _ATTACK_LOG     = _ROOT / "config" / "attack_log.json"
+
+#contatore globale di quante tx assicurate e non so state viste
 _NAKED_STATS    = _ROOT / "config" / "naked_stats.json"
 
 
@@ -35,11 +37,13 @@ def _compute_sandwich_loss(amm, victim_amount_wei: int, bot_amount_usdc: float) 
         bot_wei = int(bot_amount_usdc * 1e18)
         k = reserve_usdc * reserve_mevi
 
+        #quanto riceverebbe la vittima senza attacco
         out_no_attack = reserve_mevi - k // (reserve_usdc + victim_amount_wei)
 
         ri_after = reserve_usdc + bot_wei
         ro_after = k // ri_after
         k2 = ri_after * ro_after
+        #quanto riceverebbe la vittima dopo un attacco
         out_with_attack = ro_after - k2 // (ri_after + victim_amount_wei)
 
         loss_wei = max(0, out_no_attack - out_with_attack)
@@ -54,14 +58,17 @@ def _actual_victim_loss(w3, amm, victim_addr: str, frontrun_block: int,
     if out_no_attack_wei <= 0:
         return 0.0
     try:
+        #imposto blocco finale e quello iniziale [quello dell'attacco meno 1] in cui cercare lo swap dela vittima
         end_block = w3.eth.block_number
         start_block = max(0, frontrun_block - 1)
+        #recupero tutti gli scambi avvenuti in quell'intervallo di blocchi
         try:
             evs = amm.events.Swap().get_logs(from_block=start_block, to_block=end_block)
         except TypeError:
             evs = amm.events.Swap().get_logs(fromBlock=start_block, toBlock=end_block)
         victim_lower = victim_addr.lower()
         for ev in reversed(evs):
+            #una volta trovata la vittima nella lista guardo quanto ha ricevuto e calcolo la differenza rispetto a quanto avrebbe ricevuto senza attacco
             if ev['args']['sender'].lower() == victim_lower:
                 actual_out = ev['args']['amountOut']
                 loss = max(0, out_no_attack_wei - actual_out)
@@ -233,7 +240,9 @@ def execute_sandwich(w3, contracts, bot_acc, victim_tx, max_amount):
     mev_token = contracts["MEVToken"]
 
     v_gas_price = victim_tx.get('gasPrice') or victim_tx.get('maxFeePerGas')
+    #pago più il gas per assicurarmi di essere inserito prima
     gas_front = int(v_gas_price * 1.2)
+    #pago meno il gas per assicurarmi che il backrun venga inserito dopo
     gas_back = max(1, int(v_gas_price * 0.9))
 
     nonce = w3.eth.get_transaction_count(bot_acc)
@@ -251,6 +260,7 @@ def execute_sandwich(w3, contracts, bot_acc, victim_tx, max_amount):
             return None, None
         backrun_wei = int(mevi_out_wei * 0.99)
 
+        #preparo i pacchetti da inviare alla blockchain
         tx_f = amm.functions.swap(usdc.address, front_amount_wei).build_transaction({
             'from': bot_acc,
             'gasPrice': gas_front,
@@ -264,16 +274,20 @@ def execute_sandwich(w3, contracts, bot_acc, victim_tx, max_amount):
             'gas': 300000
         })
 
+        #invio i pacchetti
         hash_f = w3.eth.send_transaction(tx_f)
         hash_b = w3.eth.send_transaction(tx_b)
 
         print(f"[🚀] Raffiche inviate! Attendo che il blocco le catturi...")
 
+        #attendo che le tx vengano incluse in un blocco
         receipt_f = w3.eth.wait_for_transaction_receipt(hash_f)
         receipt_b = w3.eth.wait_for_transaction_receipt(hash_b)
 
         ok_f = receipt_f.get('status', 1) == 1
         ok_b = receipt_b.get('status', 1) == 1
+
+        #log per vedere se tutto è andato a buon fine
         if ok_f and ok_b:
             print(f"[✅] Sandwich minato con successo!")
             return hash_f.hex(), hash_b.hex()
@@ -308,6 +322,7 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
 
     bot_acc = w3.eth.accounts[bot_idx]
 
+    #carico una lista col bot il deployer ed eventuali altri bot per evitare di attaccarli
     def _load_known_bots() -> set:
         actors = utils.load_actors()
         bots = {a.lower() for a in actors.get("bots", [])}
@@ -335,9 +350,11 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
     except Exception:
         insurance_addr = ""
 
+   #tengo traccia di chi ha fatto l'assicurazione di recente
     insured_recent: dict = {}
     _last_event_poll_block: int = w3.eth.block_number
 
+  #leggo eventi swap insured emessi dal contratto in un range di blocchi e aggiorno il dizionario
     def _poll_insured_events(from_block: int) -> int:
         if ins_contract is None:
             return from_block
@@ -364,12 +381,13 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
         except Exception:
             return from_block
 
+    #classifica come assicurate le polizze 
     def _classify_insured(sender: str, current_block: int) -> bool:
         info = insured_recent.get(sender.lower(), {})
-        last = info.get("block", 0)
-        return last > 0 and (current_block - last) <= 10
+        return info.get("block", 0) > 0
 
     # patt on-chain è il parametro di premio, NON cambia attack_rate del bot
+    #il bot si attiva qua
     chain_patt = _read_patt_from_chain(contracts)
     if chain_patt is not None:
         print(f"[📡] patt premio on-chain: {int(chain_patt*10000)} bps ({chain_patt*100:.1f}%) "
@@ -379,11 +397,15 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
     print(f"\n[🚀] MEV BOT ATTIVO su {bot_acc}")
     print(f"[🔍] In ascolto della MEMPOOL... (attacco {pct}% degli swap visibili — naked+insured)")
 
+   #lista tx già viste per evitare di analizzarle due volte
     seen_hashes: set = set()
     last_clean_block = w3.eth.block_number
     # Contatori separati per gruppo: garantisce attack_rate identico su insured e naked
+
+    #attaccati
     attacked_ins = 0
     attacked_nak = 0
+    #visti
     eligible_ins = 0
     eligible_nak = 0
     skipped = 0
@@ -392,30 +414,36 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
         try:
             pending_txs = []
             try:
+                #richiamo la funzione in loop continuo per vedere tutte le tx non ancora minate
                 pblock = w3.eth.get_block('pending', full_transactions=True)
                 pending_txs = list(pblock.get('transactions', []))
             except Exception:
                 try:
+                    #creo filtro per le tx pending
                     pf = w3.eth.filter('pending')
-                    for h in pf.get_new_entries():
+                    for h in pf.get_new_entries(): #h è has grezzo di una tx
                         try:
                             t = w3.eth.get_transaction(h)
                             if t:
-                                pending_txs.append(t)
+                                pending_txs.append(t) #aggiunge alla lista solo se la tx è trovata
                         except Exception:
-                            pass
+                            pass #altrimenti niente
                 except Exception:
-                    pass
+                    pass #non aggiungo niente
 
             cur_block = w3.eth.block_number
+
+            #ogni 30 blocchi svuoto seen_hashes per evitare cresca troppo e occupi ram
             if cur_block > last_clean_block + 30:
                 seen_hashes.clear()
                 last_clean_block = cur_block
 
+            #ogni 50 loop ricarico la lista dei bot noti
             _bots_reload_counter += 1
             if _bots_reload_counter % 50 == 0:
                 known_bots = _load_known_bots()
 
+           #mi aggiorno su chi si è assicurato di recente
             if cur_block > _last_event_poll_block:
                 _last_event_poll_block = _poll_insured_events(_last_event_poll_block)
 
@@ -425,37 +453,43 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
                 try:
                     tx_hex = tx['hash'].hex() if hasattr(tx['hash'], 'hex') else str(tx['hash'])
 
+                    #se abbiamo già visto la tx la saltiamo
                     if tx_hex in seen_hashes:
                         continue
 
+                    #se la tx è già stata minata la saltiamo
                     if tx.get('blockNumber') is not None:
                         seen_hashes.add(tx_hex)
                         continue
 
+                    #se la tx non è diretta all'amm la saltiamo
                     if not tx.get('to') or tx['to'].lower() != amm_addr:
                         continue
 
+                    #non attacco altri bot o il deployer
                     if tx['from'].lower() in known_bots:
                         continue
 
+                    #aggiungo la tx a quell osservate
                     seen_hashes.add(tx_hex)
 
+                    #se la tx è già stata attaccata la salto
                     if tx_hex in _load_attacked():
                         utils.log(f"Skip {tx_hex[:16]}... (già attaccata)", "BOT")
                         continue
-
+                    
+                    #valuto se la tx è assicurata
                     is_insured = _classify_insured(tx['from'], cur_block)
                     kind = "insured" if is_insured else "NAKED"
 
-                    # Campionamento deterministico per gruppo: ogni gruppo riceve
-                    # esattamente attack_rate% di attacchi indipendentemente dall'altro
+                    # Decisione unica random: il bot non discrimina per tipo
                     if is_insured:
                         eligible_ins += 1
-                        should_attack = attacked_ins < eligible_ins * attack_rate
                     else:
                         eligible_nak += 1
-                        should_attack = attacked_nak < eligible_nak * attack_rate
-
+                    should_attack = random.random() < attack_rate
+                    
+                    #anche se non attacco aggiorno le stats
                     if not should_attack:
                         skipped += 1
                         _update_naked_stats(
@@ -465,15 +499,17 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
                         attacked_tot = attacked_ins + attacked_nak
                         elig_tot = eligible_ins + eligible_nak
                         continue
-
+                    #salvo il bilancio del bot prima che attacchi per vedere dopo quanto ha guadagnato
                     u_prima = utils.from_wei(usdc.functions.balanceOf(bot_acc).call())
                     attacked_tot = attacked_ins + attacked_nak + 1
                     print(f"\n[!] BERSAGLIO [{kind}]: {tx_hex}")
 
+                    #segno la vittima come attaccata
                     _mark_attacked(tx_hex)
                     _record_victim(tx_hex, tx['from'])
                     swap_amount_wei = _decode_amm_amount(tx.get('input', b''))
 
+                    #calcolo perdita senza attacco ed eventuale con attacco
                     loss_mevi_pred, loss_pct, out_no_attack_wei = _compute_sandwich_loss(
                         amm, swap_amount_wei, max_tx_usdc)
 
@@ -491,22 +527,27 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
 
                     loss_mevi = _actual_victim_loss(
                         w3, amm, tx['from'], frontrun_block, out_no_attack_wei)
+                    #in caso di errore di ricerca della perdita reale si usa quella pre calcolata
                     if loss_mevi <= 0:
                         loss_mevi = loss_mevi_pred
+                    #ricalcolo loss pct
                     loss_pct = (loss_mevi / (out_no_attack_wei / 1e18) * 100.0) if out_no_attack_wei > 0 else loss_pct
 
                     bot_info(w3, bot_acc, contracts)
                     u_dopo = utils.from_wei(usdc.functions.balanceOf(bot_acc).call())
                     profitto = u_dopo - u_prima
 
+                    #controllo se il trader era assicurato
                     _victim_info = insured_recent.get(tx['from'].lower(), {})
                     _premium_mevi = _victim_info.get("premium_wei", 0) / 1e18
+                    #inserisco nel json l'attacco avvenuto
                     _append_attack(tx_hex, tx['from'], swap_amount_wei,
                                    is_insured, profitto, bot_acc,
                                    loss_sandwich_mevi=loss_mevi, loss_pct=loss_pct,
                                    premium_mevi=_premium_mevi,
                                    frontrun_tx=hash_f_hex or "",
                                    backrun_tx=hash_b_hex or "")
+                    #aggiorno contatore globale
                     _update_naked_stats(
                         naked_delta=0 if is_insured else 1,
                         insured_delta=1 if is_insured else 0
@@ -521,6 +562,7 @@ def monitor_mempool(bot_idx=None, u_start=None, m_start=None,
                         emoji = "🟢" if is_insured else "🔴"
                         print(f"[{emoji}] {label} ATTACKED — perdita sandwich victim: "
                               f"{loss_mevi:.4f} MEVI ({loss_pct:.2f}% di {swap_usdc:.4f} USDC swappati)")
+                        #salvo nel log la la perdita della vittima con percentuale
                         utils.log(
                             f"{label} ATTACK | victim={tx['from'][:16]} | "
                             f"swap={swap_usdc:.4f} USDC | loss_sandwich={loss_mevi:.4f} MEVI ({loss_pct:.2f}%)",
@@ -558,6 +600,7 @@ if __name__ == "__main__":
                         help="Percentuale attacchi 0-100 (default: 5)")
     args = parser.parse_args()
 
+   #se sono stati inseriti parametri parto subito
     if all(x is not None for x in [args.account, args.usdc, args.mevi, args.max_swap]):
         rate = (args.attack_rate / 100.0) if args.attack_rate is not None else 0.05
         monitor_mempool(
@@ -569,4 +612,5 @@ if __name__ == "__main__":
             interactive=False
         )
     else:
+        #se non ho inserito parametri abiliyo la modalità interattiva che mi richiama poi setup bot per inserire i parametri
         monitor_mempool(interactive=True)

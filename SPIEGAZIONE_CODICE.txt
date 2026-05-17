@@ -1,6 +1,6 @@
 ════════════════════════════════════════════════════════════════════════
   MEV INSURANCE — SPIEGAZIONE COMPLETA DEL CODICE
-  (dagli attacchi fino alla generazione del report)
+
 ════════════════════════════════════════════════════════════════════════
 
 INDICE
@@ -761,54 +761,3 @@ oracle_test_state.json
     Usato dall'orchestratore per simulare oracle corrotti o con
     probabilità di voto configurate (per test slashing).
 
-
-════════════════════════════════════════════════════════════════════════
-  GLOSSARIO
-════════════════════════════════════════════════════════════════════════
-
-Sandwich attack   Attacco MEV: il bot si inserisce prima (frontrun)
-                  e dopo (backrun) lo swap della vittima, causando
-                  slippage aggiuntivo e una perdita di MEVI.
-
-AMM (x*y=k)       Automated Market Maker senza fee.
-                  Formula: amountOut = reserveOut - k/(reserveIn + amountIn)
-                  Il prezzo cambia in base alla dimensione dello swap.
-
-out_no_attack     MEVI atteso dalla vittima SE nessun frontrun fosse
-                  avvenuto. Calcolato con le reserve PRIMA del frontrun.
-
-actual_amountOut  MEVI effettivamente ricevuto dalla vittima, letto
-                  dall'evento AMM.Swap on-chain.
-
-loss_sandwich     = out_no_attack - actual_amountOut.
-                  La perdita reale causata dal sandwich. Include
-                  l'effetto di tutti gli swap concorrenti nello stesso blocco.
-
-Frontrun          Tx inviata con gas più alto per essere eseguita
-                  PRIMA di un'altra transazione target.
-
-Mempool           Pool di transazioni in attesa di essere minate.
-
-Commit-reveal     Protocollo crittografico anti-collusione:
-                  Prima tutti inviano hash(voto), poi tutti rivelano.
-
-FraudScore        Punteggio di sospetto (0-130). Basso = legittimo.
-                  Mediana dei FraudScore degli oracle → decisione.
-
-Solvency Ratio    Pool MEVI / passività attese.
-                  SR > 1.5x = sicuro, SR < 1.3x = critico.
-
-Wei               Unità minima (1 MEVI = 10^18 wei).
-                  Tutti i valori on-chain sono in wei; il report
-                  divide per 10^18 per mostrare valori leggibili.
-
-BFS               Breadth-First Search: algoritmo su grafi.
-                  Usato per misurare distanza trader ↔ bot noti.
-
-Basis point (bps) 1 bps = 0.01% → 10000 bps = 100%.
-                  Es: patt = 500 bps = 5% probabilità di attacco.
-
-initReserveA/B    Riserve iniziali dell'AMM (impostate al primo
-                  addLiquidity del deploy). Sono il target del refill.
-
-════════════════════════════════════════════════════════════════════════

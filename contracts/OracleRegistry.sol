@@ -272,7 +272,7 @@ contract OracleRegistry is Ownable, ReentrancyGuard {
         emit OracleReintegrated(msg.sender, info.stake);
     }
 
-    // Fisher-Yates selection from Active-only pool (excludes watchlisted)
+    //scelta randomica oracle
     function selectOracles(uint256 _seed, uint256 _n)
         external
         view

@@ -1775,6 +1775,8 @@ def generate_report(w3, contracts, sim_config, gov_params):
     print(f"\n  {_c('Report generato:', _GREEN)} {out}")
     return out
 
+
+#configurazione per tutti i tipi di simulazione
 # ──────────────────────────────────────────────────────────────
 #  PRESET SIMULAZIONI 
 # ──────────────────────────────────────────────────────────────
@@ -1904,6 +1906,7 @@ def collect_sim_preset():
                          {"attack_rate_bps": 2000, "max_swap_usdc": ms,
                           "patt_gov_bps": 1000, "eFNR_bps": 2000})
 
+    #simulazione base per prof
     elif scelta == "2.1":
         print(f"\n  5 insured (acc#2–6) vs 5 naked (acc#7–11) — importi 50–100 / 100–150")
         print(f"  Amount asimmetrici: insured 50-100/100-150, naked 50-100/100-150")
@@ -2238,7 +2241,7 @@ def _save_deploy_params(params: dict) -> None:
 # ──────────────────────────────────────────────────────────────
 
 def _ask_key_params(cfg: dict) -> None:
-    """Chiede P_min e M_base prima di ogni simulazione."""
+    """Chiede P_min, M_base ed E (eFNR) prima di ogni simulazione."""
     section("PARAMETRI CHIAVE PREMIUM")
     gov = cfg.setdefault('gov_params', {k: v['val'] for k, v in GOV_DEFAULTS.items()})
 
@@ -2263,6 +2266,17 @@ def _ask_key_params(cfg: dict) -> None:
     gov['mBase'] = mbase
     print(f"  {_c(f'M_base: {mbase} bps ({mbase/100:.1f}%)', _GREEN)}")
 
+    print()
+
+    # E (eFNR)
+    cur_efnr = gov.get('eFNR', GOV_DEFAULTS['eFNR']['val'])
+    print(f"  E — false negative rate (prob. attacco non rilevato dall'oracolo)")
+    print(f"  Es: 500 = 5%  |  2000 = 20% (default)  |  5000 = 50%")
+    print(f"  Valore attuale: {cur_efnr} bps ({cur_efnr/100:.1f}%)")
+    efnr = ask("E (bps)", default=cur_efnr, cast=int)
+    gov['eFNR'] = efnr
+    print(f"  {_c(f'E: {efnr} bps ({efnr/100:.1f}%)', _GREEN)}")
+
 
 def main():
     LOGS_DIR.mkdir(exist_ok=True)
@@ -2271,7 +2285,7 @@ def main():
     cfg = collect_config()
     block_ms = cfg['block_ms']
 
-    # 1b. Sempre chiedi P_min e M_base (non chiesti nei preset automatici)
+    # 1b. Sempre chiedi P_min, M_base ed E (non chiesti nei preset automatici)
     _ask_key_params(cfg)
 
     # 2. Avvio nodo Hardhat in nuova finestra

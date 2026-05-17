@@ -1,0 +1,379 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{caption}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{url}
+
+\geometry{margin=2.5cm}
+
+\sisetup{
+  output-decimal-marker = {,},
+  group-separator       = {\,},
+  group-minimum-digits  = 4,
+  group-digits          = integer,
+  detect-all
+}
+
+\title{Risultati della simulazione\\ \textit{MEV Insurance}}
+\author{Alessandro}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Configurazione}
+La simulazione è stata eseguita con 7 oracoli, 1 bot attaccante (sandwich) e
+10 trader, di cui 5 dotati di copertura \texttt{HIGH} e 5 privi di copertura
+(\textit{naked}). Il pool AMM è stato inizializzato con \num{5000}~MEVI e
+\num{5000}~USDC; il pool assicurativo è partito da \num{50}~MEVI. Il numero
+complessivo di swap eseguiti è pari a \num{13212}. Lo scenario corrisponde al
+caso~2.1 (\textit{5 insured vs 5 naked --- attack rate 10\,\%}).
+
+La sessione ha avuto inizio alle ore 01:18 e si è conclusa alle ore 11:47, per
+una durata complessiva di circa dieci ore e ventinove minuti. Poiché ogni minuto
+reale corrispondeva a un giorno simulato, il sistema ha attraversato
+\num{629}~giorni di attività compressi nel tempo reale. Ogni trader eseguiva in
+media circa tre swap al giorno con valori di transazione compresi tra \num{50}
+e \num{150}~USDC, generando un flusso continuo e realistico di operazioni sul
+pool AMM per l'intera durata della simulazione.
+
+\section{Attività dell'attaccante}
+Il bot ha attaccato \num{1129} swap su \num{13212} totali, pari all'
+\num{8,55}\,\%, sottraendo ai trader complessivamente \num{3979,11}~MEVI.
+La perdita media per swap attaccato è dunque
+\[
+  \frac{3979{,}11}{1129} \;=\; \num{3,52}\ \text{MEVI}.
+\]
+Considerando il volume totale degli swap pari a \num{983515,22}~MEVI,
+corrispondente ad uno swap medio di \num{74,44}~MEVI, la perdita media per
+attacco rappresenta il \num{4,73}\,\% del valore della singola transazione.
+
+\section{Riepilogo per trader}
+La Tabella~\ref{tab:trader} riporta, per ciascun trader, il volume
+swappato in MEVI, l'importo complessivamente sottratto dal bot, il premio
+versato e il rimborso ricevuto. Tutti gli importi sono espressi in MEVI.
+
+\begin{table}[h]
+\centering
+\caption{Sommario per singolo trader.}
+\label{tab:trader}
+\small
+\begin{tabular}{lc S[table-format=9.4] S[table-format=4.4] S[table-format=6.4] S[table-format=6.4]}
+\toprule
+\textbf{Trader} & \textbf{Cop.}
+  & {\textbf{Volume}} & {\textbf{Attaccato}}
+  & {\textbf{Premio}} & {\textbf{Rimborso}} \\
+\midrule
+\texttt{0x14dc7996\dots} & ---  & 139251.4659 & 617.2902 & {---}      & {---}      \\
+\texttt{0x23618e81\dots} & ---  &  83922.6746 & 255.8103 & {---}      & {---}      \\
+\texttt{0x71be63f3\dots} & ---  & 139786.3399 & 627.5147 & {---}      & {---}      \\
+\texttt{0xa0ee7a14\dots} & ---  & 138079.1204 & 490.7035 & {---}      & {---}      \\
+\texttt{0xbcd4042d\dots} & ---  &  84268.6757 & 352.5365 & {---}      & {---}      \\
+\midrule
+\texttt{0x15d34aaf\dots} & HIGH &  71525.0061 & 251.2716 &  274.0831  &  239.9213  \\
+\texttt{0x3c44cddd\dots} & HIGH &  70772.8040 & 256.1291 &  271.1824  &  243.4103  \\
+\texttt{0x90f79bf6\dots} & HIGH &  71526.9068 & 321.8455 &  277.1605  &  300.2928  \\
+\texttt{0x976ea740\dots} & HIGH &  72127.3627 & 303.3079 &  275.9357  &  280.0263  \\
+\texttt{0x9965507d\dots} & HIGH & 112254.8627 & 502.7021 &  432.4858  &  436.5798  \\
+\midrule
+\multicolumn{2}{l}{\textbf{Totale non assicurati}}
+       & 585308.2765 & 2343.8552 & {---}      & {---}      \\
+\multicolumn{2}{l}{\textbf{Totale assicurati}}
+       & 398206.9423 & 1635.2562 & 1530.8475  & 1500.2305  \\
+\multicolumn{2}{l}{\textbf{Totale}}
+       & 983515.2188 & 3979.1114 & 1530.8475  & 1500.2305  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Attaccato e rimborso: perché differiscono}
+Nei trader assicurati si osserva una sistematica differenza tra l'importo
+\emph{attaccato} --- cioè la perdita effettivamente subita durante lo swap ---
+e il \emph{rimborso} erogato dal protocollo. Nel complesso, su
+\num{1635,26}~MEVI dichiarati come perdita, ne sono stati rimborsati
+\num{1500,23}; la differenza di \num{135,03}~MEVI (pari all'\num{8,26}\,\% dei
+\emph{claim}) è stata rigettata dagli oracoli.
+
+La causa risiede nel meccanismo di verifica: il protocollo accetta un rimborso
+soltanto se il pattern dell'attacco sandwich registrato on-chain soddisfa i
+criteri previsti dal contratto. Quando un trader invia un \emph{claim} con un
+pattern non conforme --- ad esempio a causa di una stima errata degli indici
+di prezzo pre/post-attacco o di una struttura della transazione non
+riconosciuta come sandwich valido --- gli oracoli rigettano la richiesta. Il
+trader subisce comunque la perdita, ma non riceve rimborso per quella
+transazione.
+
+Questo meccanismo è \textbf{intenzionale}: tutela la riserva del pool da
+rimborsi fraudolenti o basati su errori lato client, garantendo che solo le
+perdite verificabili vengano indennizzate.
+
+\section{Effetto economico della copertura}
+I trader assicurati hanno versato premi per \num{1530,85}~MEVI a fronte di
+un volume swappato di \num{398206,94}~MEVI: l'incidenza media del premio sul
+volume coperto è quindi pari allo \num{0,38}\,\%. I rimborsi complessivamente
+erogati ammontano a \num{1500,23}~MEVI, da cui un \emph{loss ratio} del
+\[
+  \frac{1500{,}2305}{1530{,}8475} \;=\; \num{98,00}\,\%.
+\]
+Il pool assicurativo, partito da \num{50}~MEVI, ha registrato una crescita fino
+a \num{80,62}~MEVI al termine della simulazione ($\Delta = +\num{30,62}$~MEVI).
+Un \emph{loss ratio} del \num{98}\,\% indica che i premi raccolti coprono
+abbondantemente i rimborsi erogati, lasciando un margine del \num{2}\,\% a
+favore del pool. Dal lato del protocollo, questo margine è destinato a coprire
+i costi operativi --- in particolare le ricompense degli oracoli --- e a far
+crescere la riserva, garantendo la sostenibilità del meccanismo nelle condizioni
+simulate.
+
+\section{Confronto sul singolo swap}
+Per illustrare l'utilità economica della copertura sul singolo trade, si
+confrontano due transazioni colpite dal bot ed eseguite a poco più di un minuto
+di distanza l'una dall'altra (Tabella~\ref{tab:confronto}).
+
+\begin{table}[h]
+\centering
+\caption{Confronto tra una swap assicurata ed una non assicurata.}
+\label{tab:confronto}
+\small
+\begin{tabular}{l S[table-format=3.2] S[table-format=3.4] S[table-format=1.4] S[table-format=1.4] S[table-format=1.4]}
+\toprule
+                 & {\textbf{Input (USDC)}} & {\textbf{Output (MEVI)}}
+                 & {\textbf{Premio}} & {\textbf{Perdita}} & {\textbf{Rimborso}} \\
+\midrule
+Assicurata,    \texttt{01:26:13} &  77.25 &  56.3657 & 0.2009 & 1.9764 & 1.9864 \\
+Non assicurata, \texttt{01:27:18}& 112.95 &  98.9335 & {---}  & 3.8105 & {---}  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Nel primo caso il trader, assicurato con copertura \texttt{HIGH}, ha pagato un
+premio pari allo \num{0,36}\,\% del valore in output della transazione per
+fronteggiare una perdita del \num{3,51}\,\% del valore stesso: il rimborso
+ricevuto (\num{1,9864}~MEVI) ha coperto pressoché integralmente l'importo
+sottratto. Nel secondo caso il trader, privo di copertura, ha subìto una
+perdita del \num{3,85}\,\% del valore della transazione --- avvenuta solo
+65~secondi dopo la prima --- senza alcuna possibilità di rimborso. Il premio
+che avrebbe pagato sottoscrivendo la copertura sarebbe stato dell'ordine dello
+\num{0,36}\,\% del valore, trattandosi di una transazione eseguita nello
+stesso intervallo temporale e di entità comparabile.
+
+\section{L'assicurazione come strumento di pianificazione finanziaria}
+L'utilità della copertura non si esaurisce nel rimborso diretto della perdita:
+il vero vantaggio competitivo risiede nella \textbf{prevedibilità del costo}.
+Senza assicurazione, un trader che opera su un DEX soggetto ad attacchi
+sandwich è esposto a perdite inattese e non pianificabili: su ogni swap esiste
+una probabilità che il bot sottragga una quota del valore della transazione,
+con un impatto variabile e imprevedibile da un'operazione all'altra. Con la
+copertura \texttt{HIGH}, invece, il costo di ogni swap è \emph{noto ex ante}:
+il trader paga un premio fisso --- nell'ordine dello \num{0,38}\,\% del volume
+--- indipendentemente da quante volte verrà attaccato, e può incorporarlo nei
+propri calcoli esattamente come farebbe con le commissioni di gas o le fee
+dell'AMM. La perdita da sandwich, se si verifica, rimane a carico del pool
+assicurativo; l'incertezza individuale viene redistribuita sull'intera
+comunità degli assicurati, secondo il principio attuariale di mutualizzazione
+del rischio.
+
+\section{Due trader a confronto: prevedibilità contro incertezza}
+
+Per rendere concreta questa differenza, immaginiamo due trader --- chiamiamoli
+A e B --- che eseguono ciascuno dieci swap di importo analogo, pari al valore
+medio osservato nella simulazione: \num{74,44}~MEVI. Trader~A sottoscrive la
+copertura \texttt{HIGH} per ogni transazione; Trader~B opera senza alcuna
+protezione.
+
+Prima ancora di eseguire il primo swap, Trader~A conosce esattamente quanto
+pagherà in premi: lo \num{0,38}\,\% per ogni transazione, pari a circa
+\num{0,28}~MEVI per swap, per un totale di \num{2,83}~MEVI sull'intera
+sequenza di dieci operazioni. Questo numero non cambierà, indipendentemente
+da quante volte verrà attaccato: se il bot lo colpisce una, due o anche tre
+volte, il protocollo rimborserà integralmente la perdita e il costo netto
+rimarrà comunque \num{2,83}~MEVI. Trader~A può inserire questa cifra nel
+proprio piano finanziario come qualunque altra voce di spesa operativa.
+
+Trader~B non paga alcun premio. Con un tasso di attacco dell'\num{8,55}\,\%,
+ci si potrebbe aspettare in media circa un attacco su dieci swap --- ma questa
+è una probabilità aggregata sull'intera popolazione di transazioni, non una
+garanzia di distribuzione uniforme tra i singoli trader. Il bot seleziona le
+vittime osservando la mempool: il volume della transazione, il gas price, il
+momento esatto di invio. Nulla impedisce che Trader~B venga preso di mira zero
+volte (nessuna perdita) oppure due o tre volte di fila, con perdite cumulate
+del tutto non pianificate. La Tabella~\ref{tab:scenari} illustra come il costo
+effettivo di Trader~B possa variare a seconda di come si distribuiscono
+gli attacchi.
+
+\begin{table}[h]
+\centering
+\caption{Costo effettivo su 10 swap a seconda degli attacchi subiti
+         (perdita media per attacco: \num{3,52}~MEVI).}
+\label{tab:scenari}
+\small
+\begin{tabular}{cccc}
+\toprule
+\textbf{Attacchi subiti} & \textbf{Trader~A (assicurato)}
+  & \textbf{Trader~B (non assicurato)} & \textbf{Differenza} \\
+\midrule
+0 & \num{2,83}~MEVI & \num{0,00}~MEVI & B risparmia \num{2,83}~MEVI \\
+1 & \num{2,83}~MEVI & \num{3,52}~MEVI & B paga \num{0,69}~MEVI in più \\
+2 & \num{2,83}~MEVI & \num{7,04}~MEVI & B paga \num{4,21}~MEVI in più \\
+3 & \num{2,83}~MEVI & \num{10,56}~MEVI & B paga \num{7,73}~MEVI in più \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La tabella evidenzia il problema strutturale di operare senza copertura. Se
+Trader~B è fortunato e non viene mai attaccato, risparmia i \num{2,83}~MEVI
+di premi. Ma se viene colpito due volte consecutive --- uno scenario tutt'altro
+che raro quando la probabilità di attacco sfiora il 10\% --- la perdita sale a
+\num{7,04}~MEVI, oltre due volte e mezzo il costo fisso dell'assicurazione,
+senza preavviso e senza possibilità di rimborso.
+
+Il punto cruciale è che la probabilità di attacco è una misura statistica
+aggregata, non una garanzia di distribuzione uniforme tra i trader. Due
+operatori con lo stesso profilo e lo stesso volume possono vivere esperienze
+radicalmente diverse nello stesso arco temporale: uno esce illeso, l'altro
+subisce due attacchi in pochi minuti. Non esiste
+alcun meccanismo che garantisca equità nella distribuzione degli attacchi: il
+bot si comporta in modo opportunistico, non casuale. L'assicurazione non
+cambia la probabilità che un attacco avvenga, ma elimina l'incertezza su quanto
+quel rischio costerà al singolo trader, convertendo l'imponderabile in un costo
+fisso che può essere pianificato, budgetizzato e confrontato con qualunque altra
+voce di spesa operativa.
+
+\section{Confronto con Nexus Mutual}
+
+Nexus Mutual è il principale protocollo di assicurazione decentralizzata su
+Ethereum. Lanciato nel 2019, ha raccolto storicamente oltre trentasette milioni
+di dollari in premi e ne ha distribuiti circa diciotto e mezzo in rimborsi,
+raggiungendo un \emph{loss ratio} aggregato del \num{50,26}\,\%.\footnote{Dati
+finanziari estratti dal dashboard ufficiale Nexus Mutual su Dune Analytics,
+consultato maggio~2026: premi totali \$37.070.492, rimborsi totali
+\$18.631.511.} Sebbene copra una tipologia di rischio diversa --- il fallimento
+o l'exploit di smart contract, piuttosto che l'estrazione MEV --- il confronto
+con MEV Insurance è significativo perché i due protocolli condividono la stessa
+struttura economica di fondo e affrontano i loro rispettivi mercati con
+soluzioni tecniche costruite sulle medesime premesse.
+
+Entrambi si basano su un pool di capitali collettivo, alimentato dai premi
+degli assicurati, che viene utilizzato per erogare i rimborsi quando un
+sinistro viene giudicato legittimo. In entrambi i casi i partecipanti al
+protocollo hanno un incentivo economico alla correttezza: Nexus Mutual remunera
+gli assessori che votano in linea col consenso e penalizza quelli che si
+discostano in modo anomalo, MEV Insurance distribuisce reward agli oracle che si
+allineano alla mediana del FraudScore e applica uno slashing a chi devia. Anche
+la gestione della solvibilità segue logiche parallele: quando le riserve
+scendono sotto una soglia critica, entrambi i protocolli reagiscono alzando il
+costo della copertura --- Nexus Mutual attraverso il suo parametro di capitale
+minimo (MCR)\footnote{Il MCR (\textit{Minimum Capital Requirement}) è calibrato
+a un livello di confidenza del 99{,}5\,\%. Cfr.\
+\url{https://docs.nexusmutual.io/protocol/capital-pool/mcr/}.} e il meccanismo
+di pricing dinamico RAMM,\footnote{Nexus Mutual ha adottato il meccanismo RAMM
+(\textit{Ratcheting AMM}) nel novembre~2023 in sostituzione del precedente
+sistema basato sulla curva di legame. Cfr.\
+\url{https://docs.nexusmutual.io/protocol/pricing/}.} MEV Insurance attraverso
+il margine adattivo che scala il premio in funzione del Solvency Ratio del pool.
+
+La differenza più evidente riguarda il modo in cui viene verificata la
+legittimità di un sinistro. Nexus Mutual affida questa decisione a un processo
+di governance umana: un comitato di assessori esamina il caso, e se il consenso
+non è sufficientemente ampio il voto viene esteso all'intera comunità dei
+possessori di NXM, con un processo che richiede tipicamente dai tre ai sette
+giorni.\footnote{La procedura prevede un minimo di 72~ore per il comitato di
+primo livello e fino a 7~giorni in caso di voto allargato alla comunità. Cfr.\
+\url{https://docs.nexusmutual.io/protocol/claims-assessment/}.} Questo approccio
+è necessario quando il rischio coperto è di natura discrezionale: determinare
+se una perdita è causata da un exploit e se rientra nei termini della polizza
+richiede giudizio umano. MEV Insurance opera in modo radicalmente diverso,
+perché un attacco sandwich lascia una firma on-chain matematicamente
+inequivocabile, con frontrun, swap della vittima e backrun nello stesso blocco e
+nello stesso ordine di esecuzione. Non serve interpretazione; serve verifica. La
+rete di oracle esegue un processo commit-reveal in pochi minuti e produce un
+verdetto algoritmico basato sul FraudScore, riducendo i tempi di liquidazione da
+giorni a minuti e abbassando significativamente i costi operativi.
+
+Il divario nel \emph{loss ratio} --- \num{98}\,\% per MEV Insurance contro il
+\num{50}\,\% di Nexus Mutual --- riflette esattamente la diversa natura del
+rischio coperto. Nexus Mutual mantiene un margine di sicurezza vicino al
+\num{50}\,\% perché i rischi che affronta sono caratterizzati da alta
+imprevedibilità e potenziale impatto catastrofico: un singolo exploit può
+svuotare protocolli da centinaia di milioni di dollari, e le riserve devono
+essere abbondanti per garantire la solvibilità anche negli scenari più estremi.
+MEV Insurance copre invece un rischio statisticamente stabile e ad alta
+frequenza, per il quale la formula attuariale del premio riesce a calibrare con
+precisione l'esposizione del pool: il margine del \num{2}\,\% è sufficiente
+perché la distribuzione degli attacchi è prevedibile in aggregato, anche se
+imprevedibile per il singolo trader. In entrambi i casi, il \emph{loss ratio}
+rimane inferiore al \num{100}\,\%: condizione necessaria affinché le riserve
+crescano nel tempo e il protocollo rimanga solvibile nel lungo periodo.
+
+Il punto più rilevante ai fini di questo lavoro non riguarda però le differenze
+meccanistiche tra i due protocolli, bensì ciò che Nexus Mutual dimostra
+empiricamente: un'assicurazione decentralizzata può funzionare. In oltre cinque
+anni di operatività il protocollo ha distribuito milioni di dollari in rimborsi,
+ha continuato a crescere in termini di capitale investito e di coperture
+vendute,\footnote{Al 2025 Nexus Mutual gestisce un pool di capitali di circa
+\$400~milioni e ha venduto oltre un miliardo di dollari di coperture nell'anno.
+Fonte: Nexus Mutual, \textit{The Nexus Review --- Q4 2025 Wrap-Up},
+\url{https://forum.nexusmutual.io/t/the-nexus-review-q4-2025-wrap-up/1824},
+gennaio~2026.} e ha mantenuto un \emph{loss ratio} stabilmente inferiore al
+\num{100}\,\%. Questa è la prova che gli utenti DeFi sono disposti a pagare
+premi per proteggersi, che un meccanismo distribuito di verifica dei sinistri
+può operare equamente su scala, e che un pool assicurativo decentralizzato può
+rimanere solvibile nel lungo periodo. MEV Insurance si costruisce esattamente
+su questi stessi presupposti e li applica a una classe di rischio più granulare.
+
+Se Nexus Mutual ha dimostrato che un \emph{loss ratio} del \num{50}\,\% è
+compatibile con un protocollo assicurativo credibile e in crescita, a maggior
+ragione un \emph{loss ratio} del \num{98}\,\% --- più vicino alla neutralità
+attuariale e quindi strutturalmente più vantaggioso per l'assicurato --- è
+compatibile con la sostenibilità del pool, a condizione che la frequenza e la
+prevedibilità degli eventi coperti siano sufficientemente stabili. La
+simulazione dimostra che questa condizione è soddisfatta: il pool assicurativo è
+cresciuto da \num{50} a \num{80,62}~MEVI nonostante il \emph{loss ratio} quasi
+unitario, confermando che il margine del \num{2}\,\%, pur ridotto, è calibrato
+correttamente sulla distribuzione statistica degli attacchi sandwich. Ciò che in
+Nexus Mutual sarebbe un segnale di riserve insufficienti, nel contesto di MEV
+Insurance è l'indicatore che i premi sono calibrati in modo quasi attuarialmente
+equo: il protocollo non estrae valore in eccesso dagli assicurati, ma si limita
+a coprire i propri costi operativi, esattamente come un'assicurazione matura e
+ben governata dovrebbe fare.
+
+
+\section{Considerazioni conclusive}
+La simulazione, condotta con un tasso di attacco configurato al 10\,\% (tasso
+effettivo: \num{8,55}\,\%) e una perdita media per attacco del \num{4,73}\,\%
+del valore della singola transazione, conferma che la copertura \texttt{HIGH}
+risulta economicamente conveniente per entrambe le parti: il trader è protetto
+dalla perdita inattesa pagando un premio pari allo \num{0,38}\,\% del volume,
+mentre il protocollo registra un \emph{loss ratio} del \num{98,00}\,\% --- un
+margine del \num{2}\,\% sufficiente a coprire i costi operativi e ad accrescere
+la riserva del pool da \num{50}~MEVI a \num{80,62}~MEVI nel corso della
+simulazione.
+
+L'esempio dei due trader (sezione~8) mostra come la convenienza
+dell'assicurazione non risieda soltanto nel valore atteso dei rimborsi, ma
+nella certezza del costo: il trader assicurato sa già quanto spenderà, quello
+non assicurato non può prevederlo, e basta una sequenza di due attacchi
+ravvicinati per trovarsi a sostenere perdite più che doppie rispetto al costo
+fisso di una polizza. Il confronto con Nexus Mutual (sezione~9) evidenzia come
+MEV Insurance si inserisca coerentemente nell'ecosistema delle assicurazioni
+DeFi consolidate, condividendone i principi fondamentali e declinandoli in
+forma parametrica e automatizzata, ideale per eventi con firma on-chain
+deterministica come gli attacchi sandwich.
+
+Il meccanismo di verifica degli oracoli, che in questa simulazione ha respinto
+circa l'\num{8,26}\,\% dei \emph{claim}, si conferma essenziale per proteggere
+il pool da rimborsi impropri. Il dato suggerisce che i client devono
+implementare con precisione la costruzione del pattern sandwich affinché la
+quasi totalità delle perdite legittime venga effettivamente indennizzata.
+
+\end{document}

@@ -29,6 +29,7 @@ import os
 
 TEST_STATE_FILE = "oracle_test_state.json"
 
+#carico file json usato per iniettare malfuzionamenti negli oracle
 def _load_test_state():
     """Carica lo stato di test (bugs + jury_probs)."""
     if not os.path.exists(TEST_STATE_FILE):
@@ -71,6 +72,8 @@ _BOLD  = "\033[1m"
 #  CAPTCHA LEETSPEAK GENERATOR
 # ══════════════════════════════════════════════════════════════
 
+#generatore sfida captcha
+
 _LEET_MAP = {'a': '4', 'e': '3', 'i': '1', 'o': '0', 's': '5', 't': '7'}
 
 _CAPTCHA_PHRASES = [
@@ -104,6 +107,7 @@ def generate_captcha():
 
 _ORACLE_STATS_FILE = utils.CONFIG_DIR / "oracle_stats.json"
 
+#aggiorna il json orcale_stats con i dati degli oracle
 def _update_oracle_stats(reward_eth: float = 0.0, gas_refund_mevi: float = 0.0,
                          claims_delta: int = 0) -> None:
     """Aggiorna atomicamente oracle_stats.json con i totali cumulativi."""
@@ -168,6 +172,7 @@ def clog(msg):
 #  SETUP INTERATTIVO
 # ══════════════════════════════════════════════════════════════
 
+#cnfigurazione rete oracle manuale
 def setup():
     """Configura la rete oracle: numero, account, stake."""
     print("\n" + "=" * 55)
@@ -212,6 +217,7 @@ def _status_name(code):
     return f"Unknown({code})"
 
 
+#prima di registrare gli oracle attivo l'automine di hardhat altrimenti ci metterebbero troppo
 def register_and_activate(accounts, stake_eth):
     """Registra e attiva tutti gli oracle su OracleRegistry."""
     oreg = contracts["OracleRegistry"]
@@ -222,7 +228,7 @@ def register_and_activate(accounts, stake_eth):
     w3.provider.make_request("evm_setAutomine", [True])      # ← AGGIUNGI
     w3.provider.make_request("evm_setIntervalMining", [0])    # ← AGGIUNGI
 
-
+    #per ogni oracle verifico lo stato iniziale e registro solo non sia già registrato
     for i, addr in enumerate(accounts):
         try:
             info = oreg.functions.getOracleInfo(addr).call()
@@ -249,6 +255,7 @@ def register_and_activate(accounts, stake_eth):
         elif current_status >= 2:
             olog(i, f"Gia registrato ({_status_name(current_status)})")
 
+        #dopo la registrazione lo stato è pending e si chiama activate oracle per attivarlo
         # ── Attivazione ──
         if current_status == 1:
             try:
@@ -274,17 +281,8 @@ def register_and_activate(accounts, stake_eth):
 #  COMMIT-REVEAL: CRITTOGRAFIA
 # ══════════════════════════════════════════════════════════════
 
+#funziona crittata con salt che viene inviata al contratto che poi verificherà
 def compute_commit_hash(fraud_score, pattern_valid, salt_bytes32):
-    """
-    Replica esatta di Solidity:
-      keccak256(abi.encodePacked(uint8 _fraudScore, bool _patternValid, bytes32 _salt))
-    
-    encodePacked:
-      - uint8   → 1 byte
-      - bool    → 1 byte (0x00 o 0x01)
-      - bytes32 → 32 byte
-    Totale: 34 byte
-    """
     packed = (
         fraud_score.to_bytes(1, 'big') +
         (b'\x01' if pattern_valid else b'\x00') +
@@ -301,11 +299,9 @@ def compute_commit_hash(fraud_score, pattern_valid, salt_bytes32):
 # FUNZIONI PER IL GRAFO (BFS & NEIGHBORS)
 # ═══════════════════════════════════════════════════════════════════════════
 
+#scansiono ultimi 200 blocchi e costruisco set di indirizzi che hanno avuto interazione col target_address
 def fetch_onchain_neighbors(w3, target_address, blocks_back=200):
-    """
-    Scansiona la blockchain a ritroso per trovare indirizzi che hanno avuto 
-    interazioni dirette con il target_address.
-    """
+  
     neighbors = set()
     target_address = Web3.to_checksum_address(target_address)
     try:
@@ -328,6 +324,7 @@ def fetch_onchain_neighbors(w3, target_address, blocks_back=200):
     
     return neighbors
 
+#esclude subito i nodi whitelist e poi fa bfs su grafo delle tx
 def get_network_distance(w3, start_node, blacklist, whitelist, max_depth=3):
     """
     Esegue una Breadth-First Search (BFS) per trovare la distanza minima
@@ -369,6 +366,8 @@ def get_network_distance(w3, start_node, blacklist, whitelist, max_depth=3):
 # FUNZIONE PRINCIPALE DI ANALISI (SELF ANALYZE)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+#le 3 tx devono essere nello stesso blocco
 def self_analyze_sandwich(w3, tx_front, tx_user, tx_back, loss, swap_value, user_profile, blacklist, whitelist, precomputed_network_score=None):
     """
     Analisi investigativa dell'Oracle.
@@ -664,7 +663,7 @@ def process_claim(claim_id):
             if has_revealed := ins.functions.hasRevealed(claim_id, addr).call():
                 balances_before[addr] = w3.eth.get_balance(addr)
 
-        # Qualsiasi account può chiamare finalizeClaim
+        # Qualsiasi account può chiamare finalizeClaim una volta che tutti hanno fato reveal
         finalizer = my_assigned[0][1]
         finalizer_idx = my_assigned[0][0]
 
@@ -771,6 +770,7 @@ def process_claim(claim_id):
 #  FUNZIONI INTERATTIVE (per uso con python -i)
 # ══════════════════════════════════════════════════════════════
 
+#per ogni oracle che ha rivelato si calcola quanto ha scostato dalla mediana
 def _track_deviations(claim_id, median_score):
     """Registra lo scostamento di ogni oracle dal mediano per watchlist."""
     ins = contracts["MEVInsurance"]
@@ -1354,16 +1354,6 @@ def _check_and_topup_eth_pool():
     """
     Tesoreria unificata: se il pool ETH per i reward oracle scende sotto 2 ETH,
     converte fondi dal pool MEVI in ETH tramite rebalanceToEth().
-
-    Meccanismo:
-      - Il tasso MEVI/ETH viene letto dall'AMM (prezzo spot MEVI/USDC;
-        nella simulazione 1 USDC = 1 ETH per semplicità).
-      - Il contratto trasferisce `mev_amount` MEVI al deployer (pool MEVI scende).
-      - Il deployer invia `eth_amount` ETH al contratto (pool ETH sale).
-      - Net: tesoreria bilanciata tra i due asset.
-
-    Lo stake oracle (in OracleRegistry) è sempre separato e bloccato.
-    I proventi slash (75%) incrementano già il pool ETH automaticamente.
     """
     ins = contracts["MEVInsurance"]
     amm = contracts["MockAMM"]
@@ -1581,7 +1571,7 @@ w3 = utils.get_web3()
 contracts = utils.get_all_contracts(w3)
 deployer = w3.eth.accounts[0]
 
-# Prova a caricare oracle da actors.json oppure da args CLI
+# Prova a caricare oracle da actors.json oppure da args CLI (actors.json scritto da orchestratore)
 _saved_actors = utils.load_actors()
 
 if _saved_actors.get("oracles"):

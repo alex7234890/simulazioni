@@ -46,13 +46,13 @@ def log(msg: str, tag: str = "INFO", to_file: bool = True) -> None:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"[{ts}][{tag:>6s}] {msg}\n")
 
-
+#scrive sul file simulation.log
 def sim_log(msg: str, tag: str = " SWAP") -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{ts}][{tag:>6s}] {msg}\n")
 
-
+#deploya i contratti
 def wait_for_deploy(timeout: int = 120) -> None:
     required_keys = {"MEVToken", "OracleRegistry", "MEVInsurance", "MockAMM"}
     deadline = time.time() + timeout
@@ -78,7 +78,7 @@ def wait_for_deploy(timeout: int = 120) -> None:
         log("Waiting for deploy...", "SYSTEM")
         time.sleep(3)
 
-
+#per funzionare coi blocchi di hardhat
 def get_web3(retries: int = 5) -> Web3:
     url = "http://127.0.0.1:8545"
     for attempt in range(retries):
@@ -119,7 +119,7 @@ def save_actors(data: dict) -> None:
         json.dump(data, f, indent=2)
     log(f"Saved actors.json ({len(data)} entries)", "SYSTEM")
 
-
+#cerca in tutta la cartella i contratti
 def load_abi(contract_name: str) -> list:
     candidates = list(ARTIFACTS_DIR.rglob(f"{contract_name}.json"))
     candidates = [p for p in candidates if not p.name.endswith(".dbg.json")]
@@ -139,7 +139,7 @@ def get_contract(w3: Web3, name: str, address: str):
         abi=abi
     )
 
-
+#carico tutti i contratti de deployed_address_json in un dizionario
 def get_all_contracts(w3: Web3) -> dict:
     cfg = load_config()
     contracts = {}
@@ -167,8 +167,6 @@ def send_tx(w3: Web3, fn, sender: str, value: int = 0,
         tx_params = {"from": sender, "nonce": nonce, "gas": gas, "value": value}
 
         try:
-            # If a previous attempt sent the tx but timed out, don't resend —
-            # just wait for the original hash (it's still pending in the mempool).
             if pending_hash is not None:
                 print(f"⏳ Waiting for pending tx {pending_hash.hex()[:16]}... (attempt {attempt+1})")
                 receipt = w3.eth.wait_for_transaction_receipt(pending_hash, timeout=120)
@@ -267,6 +265,7 @@ def keccak256_commit(fraud_score: int, pattern_valid: bool, salt: int) -> bytes:
     return Web3.keccak(encoded)
 
 
+#funzione casuale per calcolar fraudscore
 def compute_fraud_score(tier_id: int, total_claims: int, total_swaps: int) -> tuple:
     score_tier = [50, 30, 15, 0][min(tier_id, 3)]
 

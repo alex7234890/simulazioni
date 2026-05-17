@@ -1,0 +1,143 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{caption}
+\usepackage{xcolor}
+
+\geometry{margin=2.5cm}
+
+% Numeri con virgola decimale e separatore di migliaia non invasivo.
+\sisetup{
+  output-decimal-marker = {,},
+  group-separator       = {\,},
+  group-minimum-digits  = 4,
+  group-digits          = integer,   % raggruppa solo la parte intera
+  detect-all
+}
+
+\title{Risultati della simulazione\\ \textit{MEV Insurance}}
+\author{Alessandro}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Configurazione}
+La simulazione è stata eseguita con 7 oracoli, 1 bot attaccante (sandwich) e
+10 trader, di cui 5 dotati di copertura \texttt{HIGH} e 5 privi di copertura.
+Il pool di liquidità è stato inizializzato con \num{50,0000}~MEVI ed ha
+terminato la simulazione con \num{157,6485}~MEVI; il numero complessivo di
+swap eseguiti è pari a \num{3144}.
+
+\section{Attività dell'attaccante}
+Il bot ha attaccato \num{384} swap su \num{3144} totali, pari al
+\num{12,21}\,\%, sottraendo ai trader complessivamente \num{1415,12}~MEVI.
+La perdita media per swap attaccato è dunque
+\[
+  \frac{1415{,}12}{384} \;=\; \num{3,68}\ \text{MEVI}.
+\]
+Considerando il volume totale degli swap pari a \num{242285,86}~MEVI, corrispondente
+ad uno swap medio di \num{77,06}~MEVI, la perdita media per attacco
+rappresenta il \num{4,78}\,\% del valore della singola transazione.
+
+\section{Riepilogo per trader}
+La Tabella~\ref{tab:trader} riporta, per ciascun trader, il volume
+swappato, l'importo complessivamente sottratto dal bot, il premio versato e
+il rimborso ricevuto. Tutti gli importi sono espressi in MEVI.
+
+\begin{table}[h]
+\centering
+\caption{Sommario per singolo trader.}
+\label{tab:trader}
+\small
+\begin{tabular}{lc S[table-format=6.4] S[table-format=3.4] S[table-format=3.4] S[table-format=3.4]}
+\toprule
+\textbf{Trader} & \textbf{Cop.}
+  & {\textbf{Volume}} & {\textbf{Attaccato}}
+  & {\textbf{Premio}} & {\textbf{Rimborso}} \\
+\midrule
+\texttt{0x14dc7996\dots} & ---  & 33991.0527 & 202.5973 & {---}    & {---}    \\
+\texttt{0x23618e81\dots} & ---  & 20667.2808 & 152.6955 & {---}    & {---}    \\
+\texttt{0x71be63f3\dots} & ---  & 33795.4000 & 149.3940 & {---}    & {---}    \\
+\texttt{0xa0ee7a14\dots} & ---  & 34170.7518 & 223.9379 & {---}    & {---}    \\
+\texttt{0xbcd4042d\dots} & ---  & 20252.2541 & 113.3481 & {---}    & {---}    \\
+\midrule
+\texttt{0x15d34aaf\dots} & HIGH & 17222.6975 & 111.4461 & 120.0275 & 111.8461 \\
+\texttt{0x3c44cddd\dots} & HIGH & 17675.8075 &  86.2144 & 121.6220 &  86.4944 \\
+\texttt{0x90f79bf6\dots} & HIGH & 17776.4241 &  70.6318 & 122.3415 &  70.9117 \\
+\texttt{0x976ea740\dots} & HIGH & 17502.8520 & 104.0501 & 120.4677 & 104.4201 \\
+\texttt{0x9965507d\dots} & HIGH & 29231.3352 & 200.8092 & 200.2787 & 201.1692 \\
+\midrule
+\multicolumn{2}{l}{\textbf{Totale non assicurati}}
+       & 142876.7394 & 841.9728 & {---}    & {---}    \\
+\multicolumn{2}{l}{\textbf{Totale assicurati}}
+       &  99409.1163 & 573.1516 & 684.7374 & 574.8415 \\
+\multicolumn{2}{l}{\textbf{Totale}}
+       & 242285.8557 & 1415.1244 & 684.7374 & 574.8415 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Effetto economico della copertura}
+i trader assicurati hanno versato premi per
+\num{684,74}~MEVI a fronte di un volume swappato di \num{99409,12}~MEVI:
+l'incidenza media del premio sul volume coperto è quindi pari allo
+\num{0,69}\,\%. I rimborsi complessivamente erogati ammontano a
+\num{574,84}~MEVI, da cui un \emph{loss ratio} del
+\[
+  \frac{574{,}8415}{684{,}7374} \;=\; \num{83,95}\,\%.
+\]
+Il pool, partito da \num{50,0000}~MEVI, è cresciuto fino a
+\num{157,6485}~MEVI nel corso della simulazione, registrando un incremento
+netto di \num{107,65}~MEVI.
+
+\section{Confronto sul singolo swap}
+Per illustrare l'utilità economica della copertura sul singolo trade, si
+confrontano due transazioni colpite dal bot ed eseguite a meno di trenta
+secondi di distanza l'una dall'altra (Tabella~\ref{tab:confronto}).
+
+\begin{table}[h]
+\centering
+\caption{Confronto tra una swap assicurata ed una non assicurata.}
+\label{tab:confronto}
+\small
+\begin{tabular}{l S[table-format=3.2] S[table-format=3.4] S[table-format=1.4] S[table-format=1.4] S[table-format=1.4]}
+\toprule
+                 & {\textbf{Input (USDC)}} & {\textbf{Output (MEVI)}}
+                 & {\textbf{Premio}} & {\textbf{Perdita}} & {\textbf{Rimborso}} \\
+\midrule
+Assicurata,    \texttt{14:25:02} & 89.94  &  81.4109 & 0.4946 & 3.1890 & 3.1990 \\
+Non assicurata, \texttt{14:25:25}& 146.40 & 130.6362 & {---}  & 7.9119 & {---}  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Nel primo caso il trader ha pagato un premio pari allo \num{0,61}\,\% del
+valore della transazione per evitare una perdita del \num{3,92}\,\% del
+valore stesso, ricevendo un rimborso integrale dell'importo sottratto. Nel
+secondo caso il trader, non assicurato, ha subito una perdita pari al
+\num{6,06}\,\% del valore della transazione senza alcuna possibilità di
+rimborso; il premio che avrebbe pagato sottoscrivendo la copertura sarebbe
+stato di entità analoga al primo caso ($\sim 0{,}6$--$0{,}7$\,\% del valore),
+trattandosi di transazioni eseguite nello stesso intervallo temporale.
+
+\section{Considerazioni conclusive}
+La simulazione conferma che, nel regime osservato
+(\num{12,21}\,\% di swap attaccati e perdita media per attacco pari al
+\num{4,78}\,\% del valore della singola transazione), la copertura
+\texttt{HIGH} risulta economicamente conveniente per il trader: il premio
+medio versato (\num{0,69}\,\% del volume coperto) è inferiore di un ordine
+di grandezza alla perdita attesa nel caso di un attacco. Dal lato del
+protocollo, un \emph{loss ratio} aggregato del \num{83,95}\,\% lascia un
+margine sufficiente a coprire i costi operativi --- in particolare le
+ricompense degli oracoli --- ed a far crescere la riserva del pool,
+garantendo la sostenibilità del meccanismo nelle condizioni simulate.
+
+\end{document}

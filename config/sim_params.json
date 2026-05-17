@@ -1,8 +1,8 @@
 {
   "scenario": "2.1",
-  "name": "5 insured vs 5 naked \u2014 attack_rate 15%",
+  "name": "5 insured vs 5 naked \u2014 attack_rate 10%",
   "params": {
-    "attack_rate_bps": 1500,
+    "attack_rate_bps": 1000,
     "trader_insured_accs": [
       2,
       3,
@@ -19,5 +19,5 @@
     ],
     "patt_gov_bps": 1000
   },
-  "started_at": "2026-04-28 13:39:22"
+  "started_at": "2026-05-12 01:17:50"
 }

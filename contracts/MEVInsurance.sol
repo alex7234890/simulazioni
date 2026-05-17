@@ -1080,8 +1080,7 @@ contract MEVInsurance is Ownable, ReentrancyGuard {
         emit OracleRewarded(oracle, reward);
     }
 
-    // Owner sends ETH and receives MEVI from the pool at AMM spot rate (enforced off-chain).
-    // Used to top up the oracle reward fund when ETH balance falls below threshold.
+   
     function rebalanceToEth(uint256 meviAmount) external payable onlyOwner nonReentrant {
         require(msg.value > 0, "Must send ETH");
         require(meviAmount > 0, "meviAmount must be > 0");

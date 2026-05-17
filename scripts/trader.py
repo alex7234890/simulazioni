@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", message=".*MismatchedABI.*")
 # Attesa dopo swap prima di controllare attack_log (2 blocchi + margine)
 _ATTACK_WAIT_SEC = max(int(os.environ.get("BLOCK_INTERVAL_MS", "3000")) / 1000 * 2 + 2.0, 8.0)
 
+#accetto argomenti trasmessi in più modi
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument('account_pos', nargs='?', type=int, default=None)
 _parser.add_argument('--account', type=int, default=None)
@@ -44,7 +45,7 @@ _NOMI_COV = ["LOW", "MEDIUM", "HIGH"]
 
 _swap_log = []
 
-
+#legge il json scritto dal bot 
 def _load_attack_log() -> dict:
     try:
         if _ATTACK_LOG.exists():
@@ -55,6 +56,7 @@ def _load_attack_log() -> dict:
     return {}
 
 
+#stima di quanto ricevo
 def _estimate_mevi_out(usdc_wei: int) -> float:
     try:
         ra = amm.functions.reserveA().call()
@@ -66,12 +68,14 @@ def _estimate_mevi_out(usdc_wei: int) -> float:
         return 0.0
 
 
+#aspetta 8 secondi di default e poi legge l'attack log cercando la propria tx_hash vedendo se è stata attaccata
 def _wait_and_check_attack(tx_hash_hex: str) -> dict | None:
     time.sleep(_ATTACK_WAIT_SEC)
     key = tx_hash_hex.lower()
     return _load_attack_log().get(key)
 
 
+#legge dall'attack entry il record dell'attack log per vedere le 3 tx del sandwich
 def _do_claim_from_log(swap_id, victim_tx_hex: str, attack_entry: dict,
                        loss_mevi: float, usdc_amount: float):
     frontrun_hex = attack_entry.get("frontrun_tx", "")
@@ -82,6 +86,7 @@ def _do_claim_from_log(swap_id, victim_tx_hex: str, attack_entry: dict,
         print("  ⚠️  Dati claim incompleti nell'attack_log — claim saltato")
         return 0, 0.0, "dati claim incompleti"
 
+    #converte hash hex in bytes32, un formato che il contratto solidity si aspetta
     def _to_bytes32(h: str) -> bytes:
         h = h[2:] if h.startswith("0x") else h
         return bytes.fromhex(h.zfill(64))
@@ -93,13 +98,14 @@ def _do_claim_from_log(swap_id, victim_tx_hex: str, attack_entry: dict,
         loss_capped = min(loss_mevi, usdc_amount)
         loss_wei = utils.to_wei(loss_capped)
         bot_addr = Web3.to_checksum_address(bot_str)
-
+        #mando la claim
         receipt = utils.send_tx(
             w3,
             ins.functions.submitClaim(swap_id, tx1, tx2, tx3, loss_wei, bot_addr),
             trader
         )
         claim_id = None
+        #attendo la ricevuta della claim
         for log_e in ins.events.ClaimSubmitted().process_receipt(receipt):
             claim_id = log_e['args']['claimId']
             oracles = log_e['args']['assignedOracles']
@@ -108,6 +114,7 @@ def _do_claim_from_log(swap_id, victim_tx_hex: str, attack_entry: dict,
         if claim_id is None:
             return 0, 0.0, "claim ID non trovato nel receipt"
 
+        #attendo risultato della claim
         status, payout, reason = _attendi_risultato(claim_id)
         return status, payout, reason
 
@@ -118,9 +125,13 @@ def _do_claim_from_log(swap_id, victim_tx_hex: str, attack_entry: dict,
 
 def _attendi_risultato(claim_id, timeout_sec=600):
     print(f"  ⏳ In attesa di valutazione degli oracle per il claim #{claim_id}...")
+
+    #guardo quanto ho senza un eventuale refund
     mevi_prima = mevi.functions.balanceOf(trader).call()
 
     deadline = time.time() + timeout_sec
+
+    #polling ogni secondo sullo stato della claim finchè oracle non votano
     while time.time() < deadline:
         info = ins.functions.getClaimInfo(claim_id).call()
         status = info[1]
@@ -136,9 +147,11 @@ def _attendi_risultato(claim_id, timeout_sec=600):
             utils.sim_log(f"[CLAIM #{claim_id}] TIMEOUT oracle: non finalizzato dopo {timeout_sec}s", tag="CLAIM")
             return 1, 0.0, f"TIMEOUT oracle (>{timeout_sec}s)"
 
+    #guardo quanto mi hanno refundato facendo la differenza fra prima e ora
     mevi_dopo = mevi.functions.balanceOf(trader).call()
     payout_mevi = max(0.0, utils.from_wei(mevi_dopo - mevi_prima))
 
+    #leggo profilo per costruire resoconto dettagliato del fraudscore
     profile = ins.functions.getUserProfile(trader).call()
     fraud_score = info[2]
     loss = utils.from_wei(info[4])
@@ -146,6 +159,7 @@ def _attendi_risultato(claim_id, timeout_sec=600):
     tiers = ["BRONZE", "SILVER", "GOLD", "PLATINUM"]
     tier_name = tiers[profile[0]]
 
+    #riscostruisco lato client la composizione del fraudscore per farla vedere
     base_tier_scores = {0: 50, 1: 30, 2: 15, 3: 0}
     base_score = base_tier_scores.get(profile[0], 50)
     total_swaps = profile[2]
@@ -157,6 +171,8 @@ def _attendi_risultato(claim_id, timeout_sec=600):
     elif claim_rate_pct >= 10: score_claim = 20
     elif claim_rate_pct >= 6: score_claim = 15
     else: score_claim = 0
+
+    #lo ricavo per differenza avendo gli altri 2
     score_network = max(0, fraud_score - base_score - score_claim)
 
     status_labels = {2: "⏳ CAPTCHA RICHIESTO", 3: "✅ APPROVATO",
@@ -190,6 +206,7 @@ def _attendi_risultato(claim_id, timeout_sec=600):
         print(f"  ║ Pattern invalidato da ≥70% degli oracle.                 ║")
     print(f"  ╚══════════════════════════════════════════════════════════╝\n")
 
+    #se il contratto richiede captcha il trader lo risolve in automatico
     if status == 2:
         captcha_reason = _auto_captcha_claim(claim_id)
         mevi_final = mevi.functions.balanceOf(trader).call()
@@ -214,6 +231,7 @@ def _attendi_risultato(claim_id, timeout_sec=600):
     return status, payout_mevi, ""
 
 
+#menu per uso manuale trader
 def menu():
     print("\n" + "="*45)
     print("      🛡️  MEV INSURANCE CONSOLE 🛡️")
@@ -234,6 +252,7 @@ def menu():
     print(" INFO LIVELLI: 0 = LOW (50%), 1 = MED (70%), 2 = HIGH (100%)")
 
 
+#info del trader
 def info():
     u_bal = utils.from_wei(usdc.functions.balanceOf(trader).call())
     m_bal = utils.from_wei(mevi.functions.balanceOf(trader).call())
@@ -247,6 +266,7 @@ def info():
     print("-" * 25)
 
 
+#per ricevere dal contrato un preventivo di quanto premio pagherò
 def preventivo(u):
     val = utils.to_wei(u)
     livelli = {0: "LOW    (Rimborso 50%) ", 1: "MEDIUM (Rimborso 70%) ",
@@ -258,6 +278,7 @@ def preventivo(u):
     print("-" * 45)
 
 
+#secuzione di uno swap non protetto
 def swap_nudo(u):
     val = utils.to_wei(u)
     stima_mevi = _estimate_mevi_out(val)
@@ -271,6 +292,7 @@ def swap_nudo(u):
 
     print(f"  ✅ Swap nudo {u} USDC | stima: {stima_mevi:.4f} MEVI | ricevuti: {mevi_ricevuti:.4f} MEVI")
 
+    #aspetta 8 secondi e controlla se il bot ha attaccato la tx e nel caso lo comunica e scrive nel log
     attack = _wait_and_check_attack(victim_tx_hex)
     if attack:
         loss = attack.get("loss_sandwich_mevi", 0.0)
@@ -289,6 +311,7 @@ def swap_nudo(u):
             f"ATTACCO: NO"
         )
 
+   #aggiungo un record alla lisa dei logcv
     _swap_log.append({
         'idx': len(_swap_log), 'tipo': 'nudo', 'usdc': u,
         'stima': stima_mevi, 'ricevuti': mevi_ricevuti,
@@ -301,10 +324,12 @@ def swap_protetto(u, livello=1):
     cov_name = _NOMI_COV[livello] if livello < 3 else str(livello)
 
     stima_mevi = _estimate_mevi_out(val)
-
+    
+    #pago il premio
     premio = ins.functions.getPremiumEstimate(val, livello).call()
     utils.send_tx(w3, mevi.functions.approve(ins.address, premio), trader)
 
+    #attendo lo swap_id univoco emesso dal contratto
     receipt_ins = utils.send_tx(
         w3,
         ins.functions.insuredSwap(val, livello),
@@ -317,8 +342,10 @@ def swap_protetto(u, livello=1):
 
     premio_mevi = utils.from_wei(premio)
 
+    #leggo dopo aver pagato il premio
     mevi_prima = mevi.functions.balanceOf(trader).call()
 
+    #eseguo la tx
     utils.send_tx(
         w3,
         usdc.functions.approve(amm.address, val),
@@ -332,6 +359,7 @@ def swap_protetto(u, livello=1):
     )
 
     mevi_dopo = mevi.functions.balanceOf(trader).call()
+    #calcolo quanto ho ricevuto tramite la differenza
     mevi_ricevuti = utils.from_wei(mevi_dopo - mevi_prima)
 
     victim_tx_hex = receipt_swap['transactionHash'].hex()
@@ -343,6 +371,7 @@ def swap_protetto(u, livello=1):
         f"ricevuti: {mevi_ricevuti:.4f} MEVI"
     )
 
+    #attendo 8s per vedere se il bot attacca la tx
     attack = _wait_and_check_attack(victim_tx_hex)
 
     entry = {
@@ -360,8 +389,10 @@ def swap_protetto(u, livello=1):
         'payout': 0.0,
     }
 
+   #registro il log dello swap
     _swap_log.append(entry)
 
+   #in caso fosse stato attaccato faccio la claim
     if attack:
         loss = attack.get("loss_sandwich_mevi", 0.0)
         if loss == 0.0:
@@ -372,6 +403,7 @@ def swap_protetto(u, livello=1):
             f"Perdita: {loss:.4f} MEVI — auto-claim..."
         )
 
+        #esecuzione claim
         status, payout, reason = _do_claim_from_log(
             swap_id,
             victim_tx_hex,
@@ -419,10 +451,10 @@ def swap_protetto(u, livello=1):
             f"ricevuti: {mevi_ricevuti:.4f} MEVI | "
             f"ATTACCO: NO"
         )
-
+    #salvo il log del risultato della claim nel simulation.log
     utils.sim_log(log_line)
 
-
+#stampa storico di tutte le tx nello swap log
 def storico():
     if not _swap_log:
         print("  Nessuno swap registrato.")
@@ -441,13 +473,13 @@ def storico():
               f"{e['stima']:>11.4f} │ {e['ricevuti']:>11.4f} │ {cov:>10s} │ {stato}")
     print(f"{'═'*72}")
 
-
+#per trasferire fondi dal deployer al trader
 def set_fondi(u, m):
     utils.send_tx(w3, usdc.functions.transfer(trader, utils.to_wei(u)), deployer)
     utils.send_tx(w3, mevi.functions.transfer(trader, utils.to_wei(m)), deployer)
     print(f"  ✅ Accreditati {u} USDC e {m} MEVI.")
 
-
+#per hardhat, per simulare il salto temporale
 def skip_giorni(n=1):
     secondi = n * 86400
     w3.provider.make_request("evm_increaseTime", [secondi])
@@ -457,10 +489,12 @@ def skip_giorni(n=1):
 
 _REVERSE_LEET = {'4': 'a', '3': 'e', '1': 'i', '0': 'o', '5': 's', '7': 't'}
 
+#funzione che permette di risolvere in automatico il captcha
 def _decode_leetspeak(challenge):
     return ''.join(_REVERSE_LEET.get(ch, ch) for ch in challenge)
 
 
+#risoluzione automatica del captcha per la simulazione
 def _auto_captcha_claim(claim_id) -> str:
     print(f"\n  🤖 AUTO-CAPTCHA: attendo sfida per claim #{claim_id}...")
     for _ in range(90):  # 90s: oracle pubblica inline ma potrebbe esserci lag
@@ -494,6 +528,7 @@ def _auto_captcha_claim(claim_id) -> str:
         return msg
 
 
+#risoluzione manuale captcha claim
 def captcha_claim(claim_id):
     cc = ins.functions.getClaimCaptcha(claim_id).call()
     if cc[4]:
@@ -527,7 +562,7 @@ def captcha_claim(claim_id):
     except Exception as e:
         print(f"  ❌ Errore: {e}")
 
-
+#mi serve per attendere che gli oracle abbino verificato la risposta captcha
 def _attendi_captcha_claim(claim_id) -> bool:
     for _ in range(240):  # 240s: oracle deve rilevare evento + votare 2-of-3
         cc = ins.functions.getClaimCaptcha(claim_id).call()
@@ -549,7 +584,7 @@ def _attendi_captcha_claim(claim_id) -> bool:
     print(f"  ⚠️  Timeout verdetto CAPTCHA (240s): claim #{claim_id} non risolto.")
     return False
 
-
+#invio eth nativi al pool degli oracle dal pool assicurativo
 def fondi_pool_eth(importo_eth):
     val = Web3.to_wei(importo_eth, 'ether')
     saldo_eth = w3.eth.get_balance(trader)
@@ -562,7 +597,7 @@ def fondi_pool_eth(importo_eth):
     print(f"  ✅ Versati {importo_eth} ETH al pool oracle.")
     print(f"  Pool ETH: {Web3.from_wei(pool_bal, 'ether'):.6f} ETH")
 
-
+#invio eth ad un altro account hardhat
 def invia_eth(destinatario_idx, importo_eth):
     dest = w3.eth.accounts[destinatario_idx]
     val = Web3.to_wei(importo_eth, 'ether')
@@ -571,7 +606,7 @@ def invia_eth(destinatario_idx, importo_eth):
     print(f"  💸 Inviati {importo_eth} ETH a Account #{destinatario_idx} ({dest[:16]}...)")
     print(f"  ⚠️  Transazione visibile dal BFS degli oracle!")
 
-
+#richiedi passaggio a platinum depositando lo
 def richiedi_platinum(max_swap_usdc):
     profile = ins.functions.getUserProfile(trader).call()
     tiers = ["BRONZE", "SILVER", "GOLD", "PLATINUM"]
@@ -593,7 +628,7 @@ def richiedi_platinum(max_swap_usdc):
     except Exception as e:
         print(f"  ❌ Errore: {e}")
 
-
+#risolve il captcha del platinum in automatico
 def _auto_captcha_platinum():
     print(f"\n  🤖 AUTO-CAPTCHA: attendo sfida Platinum...")
     for _ in range(60):
@@ -622,7 +657,7 @@ def _auto_captcha_platinum():
     except Exception as e:
         print(f"  ❌ Errore auto-captcha platinum: {e}")
 
-
+#serve per la risposta manuale al captcha del platinum
 def rispondi_captcha():
     req = ins.functions.getPlatinumRequest(trader).call()
     if req[6]:
@@ -648,7 +683,7 @@ def rispondi_captcha():
     except Exception as e:
         print(f"  ❌ Errore: {e}")
 
-
+#attendo che gli oracle abbiano verificato la richiesta a platinum
 def _attendi_verdetto_platinum():
     for _ in range(120):
         req = ins.functions.getPlatinumRequest(trader).call()
@@ -674,7 +709,7 @@ def _attendi_verdetto_platinum():
         time.sleep(1)
     print(f"  ⚠️  Timeout verdetto Platinum.")
 
-
+#se il trader è a corto di fondi viene rifondato per continuare la simulazione
 def _auto_refund():
     u_bal = utils.from_wei(usdc.functions.balanceOf(trader).call())
     m_bal = utils.from_wei(mevi.functions.balanceOf(trader).call())
@@ -690,6 +725,7 @@ def _auto_refund():
     return refunded
 
 
+#serve per automatizzare un trader non assicurato trmite parametri
 def run_auto_naked_mode(interval_sec, amount_min, amount_max, tx_count):
     print(f"  [AUTO] Trader NUDO | account={trader[:16]}... | "
           f"ogni {interval_sec}s | {amount_min}-{amount_max} USDC")
@@ -716,13 +752,15 @@ def run_auto_naked_mode(interval_sec, amount_min, amount_max, tx_count):
             print(f"  [AUTO] Fermato dopo {done} TX.")
             break
 
-
+#automatizze un trader assicurato per le simulazioni con parametri
 def run_auto_mode(interval_sec, amount_min, amount_max, coverage, tx_count):
     cov_name = _NOMI_COV[coverage] if coverage < 3 else str(coverage)
     print(f"  [AUTO] Trader PROTETTO | account={trader[:16]}... | "
           f"ogni {interval_sec}s | {amount_min}-{amount_max} USDC | copertura {cov_name}")
 
     done = 0
+
+    #serve se un trader supera il limite di swap aspetta fino al giorno successsivo
     blocked_day = None
 
     while tx_count == 0 or done < tx_count:
@@ -775,6 +813,7 @@ def run_auto_mode(interval_sec, amount_min, amount_max, coverage, tx_count):
     print(f"  [AUTO] Completato: {done} swap.")
 
 
+#possibilità di inserire valori per parametro oppure tramite menu interattivo
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MEV Insurance Trader")
     parser.add_argument('account_pos', nargs='?', type=int, default=None)

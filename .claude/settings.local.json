@@ -13,7 +13,11 @@
       "Bash(grep *)",
       "Bash(wc -l \"C:\\\\Users\\\\aless\\\\Documents\\\\simulazioni\\\\scripts\"/*.py \"C:\\\\Users\\\\aless\\\\Documents\\\\simulazioni\\\\scripts\"/*.js)",
       "Bash(ls *)",
-      "Skill(statusline)"
+      "Skill(statusline)",
+      "Bash(dir /s *.py)",
+      "WebSearch",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\aless\\\\Documents\\\\simulazioni\\\\tesi finale.txt\" | Measure-Object -Line\\).Lines)",
+      "PowerShell(Get-Content *)"
     ]
   }
 }

@@ -1,0 +1,2762 @@
+\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{colortbl}
+\usepackage{xcolor}
+\usepackage{longtable}
+\usepackage{diagbox}
+\usepackage{float}
+\usepackage{siunitx}
+\usepackage{caption}
+\usepackage{url}
+\usepackage{setspace}
+\usepackage{listings}
+
+\lstdefinelanguage{Solidity}{
+  keywords={pragma, solidity, contract, function, returns, mapping, address, uint256, uint8, bool, bytes32, struct, enum, event, modifier, require, emit, if, else, for, return, public, external, internal, view, pure, payable, memory, storage, calldata, true, false, delete, new, this, msg, block, abi, type},
+  keywordstyle=\color{blue!70!black}\bfseries,
+  comment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{orange!70!black},
+  morestring=[b]",
+  morestring=[b]',
+  sensitive=true
+}
+
+\lstset{
+  language=Solidity,
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!40},
+  backgroundcolor=\color{gray!5},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=6pt,
+  xleftmargin=12pt,
+  captionpos=b,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\sisetup{
+  output-decimal-marker = {,},
+  group-separator       = {\,},
+  group-minimum-digits  = 4,
+  group-digits          = integer,
+  detect-all
+}
+
+\usetikzlibrary{positioning, arrows.meta, shapes, calc, shapes.geometric}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    pdftitle={MEV Insurance: un protocollo assicurativo decentralizzato},
+    pdfauthor={Alessandro Melani},
+}
+
+\title{MEV Insurance: un protocollo assicurativo decentralizzato\\contro gli attacchi sandwich su DEX}
+\author{Alessandro Melani}
+\date{Maggio 2026}
+
+\begin{document}
+
+\setstretch{1.6}
+
+\maketitle
+
+\setcounter{tocdepth}{4}
+\setcounter{secnumdepth}{4}
+\tableofcontents
+\newpage
+
+%========================================================================
+\newpage
+\section{Contesto e Stato dell'Arte}
+\label{sec:stato-arte}
+%========================================================================
+
+Il protocollo MEV Insurance si inserisce all'intersezione di tre ambiti di ricerca
+attivi: la caratterizzazione economica degli attacchi di frontrunning sugli exchange
+decentralizzati, lo studio dei meccanismi di estrazione di valore dalle blockchain
+(\emph{Maximal Extractable Value}), e lo sviluppo di protocolli assicurativi
+decentralizzati. Questa sezione riassume le principali contribuzioni della letteratura
+in ciascun ambito e identifica la lacuna a cui MEV Insurance intende rispondere.
+
+%------------------------------------------------------------------------
+\subsection{Blockchain ed Ecosistema DeFi}
+%------------------------------------------------------------------------
+
+Ethereum, introdotto da Buterin nel 2014 e reso operativo nel 2015, è la piattaforma
+di smart contract più diffusa e costituisce il substrato su cui si è sviluppata la
+\textbf{Finanza Decentralizzata} (DeFi): un ecosistema di protocolli finanziari
+autonomi che operano senza intermediari tradizionali.\footnote{V. Buterin,
+``Ethereum White Paper: A Next Generation Smart Contract \& Decentralised Application
+Platform'', \textit{ethereum.org}, 2014. \url{https://ethereum.org/en/whitepaper/}.}
+Al 2025 il valore totale bloccato (\emph{Total Value Locked}, TVL) nei protocolli DeFi
+supera i cento miliardi di dollari, con una concentrazione significativa su exchange
+decentralizzati (DEX), protocolli di prestito e derivati on-chain.
+
+Ethereum utilizza un modello di esecuzione basato su una macchina virtuale (EVM) che
+elabora le transazioni in blocchi. Ogni blocco è proposto da un validatore selezionato
+attraverso il meccanismo \emph{Proof-of-Stake} e contiene un numero limitato di
+transazioni ordinate secondo criteri economici. L'ordinamento delle transazioni
+all'interno di un blocco è la radice del problema MEV: chiunque abbia potere su tale
+ordinamento ha la possibilità di estrarre valore a spese degli altri partecipanti.
+
+%------------------------------------------------------------------------
+\subsection{Automated Market Maker e Meccanismo di Prezzo}
+%------------------------------------------------------------------------
+
+Gli exchange decentralizzati moderni si basano sul paradigma degli
+\textbf{Automated Market Maker} (AMM), che sostituisce il tradizionale order book
+con una funzione matematica che determina il prezzo in funzione delle riserve di
+liquidità disponibili. Il modello dominante, introdotto da Uniswap v2 e perfezionato
+in Uniswap v3,\footnote{H. Adams, N. Zinsmeister, M. Salem, R. Keefer, D. Robinson,
+\textit{Uniswap v3 Core}, Whitepaper tecnico, 2021.
+\url{https://uniswap.org/whitepaper-v3.pdf}.} è la \textbf{funzione di prodotto costante}:
+\[
+x \cdot y = k
+\]
+dove $x$ e $y$ sono le riserve dei due token nel pool e $k$ è una costante. Un
+acquisto di quantità $\Delta x$ di token X riduce la riserva di X e aumenta quella
+di Y secondo la relazione $y' = k / (x + \Delta x)$; il prezzo effettivamente
+pagato è quindi superiore al prezzo istantaneo di mercato, con uno scarto che cresce
+al crescere di $\Delta x$ rispetto alla liquidità disponibile. Questo scarto è lo
+\textbf{slippage}, ed è il valore che un attaccante può sottrarre intercettando e
+manipolando l'ordinamento delle transazioni.
+
+Angeris et al.\ hanno analizzato formalmente le proprietà dei mercati AMM,\footnote{G.
+Angeris, H.-T. Kao, R. Chiang, C. Noyes, T. Chitra, ``An Analysis of Uniswap Markets'',
+\textit{Cryptoeconomic Systems}, 2021. \url{https://arxiv.org/abs/1911.03380}.}
+dimostrando che in presenza di arbitraggisti il prezzo AMM converge al prezzo di mercato
+esterno e che la liquidità concentrata (introdotta in Uniswap v3) migliora l'efficienza
+del capital deployment. Tuttavia, questa stessa efficienza può amplificare il potenziale
+di estrazione attraverso transazioni strategicamente ordinate, poiché lo slippage su
+pool a liquidità concentrata può superare quello dei pool uniformi nei pressi dei tick
+boundary.
+
+%------------------------------------------------------------------------
+\subsection{Maximal Extractable Value (MEV)}
+%------------------------------------------------------------------------
+
+Il termine \emph{Miner Extractable Value} --- poi generalizzato in
+\emph{Maximal Extractable Value} per includere i validatori PoS --- è stato
+formalizzato da Daian et al.\ nel lavoro seminale \emph{Flash Boys 2.0}
+(IEEE S\&P 2020):\footnote{P. Daian, S. Goldfeder, T. Kell, Y. Li, X. Zhao,
+I. Bentov, L. Breidenbach, A. Juels, ``Flash Boys 2.0: Frontrunning in
+Decentralized Exchanges, Miner Extractable Value, and Consensus Instability'',
+\textit{Proc.\ IEEE Symposium on Security and Privacy (S\&P)}, 2020.
+\url{https://arxiv.org/abs/1904.05234}.}
+\[
+\text{MEV} = \max_{\sigma} \left( \sum_{tx \in B_\sigma} \text{profit}(tx) \right) - \text{reward standard}(B)
+\]
+dove $B_\sigma$ è un blocco con ordinamento $\sigma$ delle transazioni e il massimo
+è preso su tutti i possibili ordinamenti. In parole: il MEV è il profitto aggiuntivo
+che un validatore (o un bot in collusione con esso) può estrarre rispetto a un
+ordinamento neutro delle transazioni.
+
+Qin et al.\ hanno quantificato il MEV estratto su Ethereum tra gennaio 2020 e aprile
+2021, identificando oltre 540 milioni di dollari di MEV rilevabile on-chain:\footnote{K.
+Qin, L. Zhou, B. Livshits, A. Gervais, ``Quantifying Blockchain Extractable Value:
+How dark is the forest?'', \textit{Proc.\ IEEE S\&P}, 2022.
+\url{https://arxiv.org/abs/2101.05511}.} una quota significativa di questo valore
+è riconducibile a operazioni di frontrunning e sandwich. La tassonomia del MEV include
+diverse categorie:
+
+\begin{itemize}
+    \item \textbf{Frontrunning}: inserimento di una transazione identica a quella
+    della vittima ma con gas più alto, in modo che venga eseguita prima.
+    \item \textbf{Sandwich attack}: sequenza frontrun--victim--backrun che sfrutta
+    l'impatto di prezzo della transazione della vittima per estrarre profitto (trattato
+    in dettaglio nella sezione successiva).
+    \item \textbf{Backrunning}: inserimento di una transazione immediatamente dopo
+    un evento on-chain noto (es.\ aggiornamento di un oracolo di prezzo).
+    \item \textbf{Liquidazioni}: race condition tra bot per eseguire la liquidazione
+    di posizioni sottocollateralizzate nei protocolli di lending.
+    \item \textbf{Arbitraggio}: sfruttamento di discrepanze di prezzo tra pool
+    diversi, neutrale per gli utenti ma competitivo tra bot.
+\end{itemize}
+
+Studi successivi hanno esteso l'analisi al periodo post-Merge, confermando che la
+transizione a Proof-of-Stake non ha ridotto il fenomeno: il MEV è migrato dai miner
+ai validatori e ai \emph{block builder} specializzati dell'infrastruttura
+MEV-Boost.\footnote{Flashbots, \textit{MEV-Boost: Merge ready Flashbots Architecture},
+\url{https://github.com/flashbots/mev-boost}, 2022.} Il MEV è oggi sistematicamente
+rilevante e tendenzialmente crescente con la liquidità degli exchange.
+
+%------------------------------------------------------------------------
+\subsection{Attacchi Sandwich: Letteratura e Caratterizzazione Empirica}
+%------------------------------------------------------------------------
+
+Gli attacchi sandwich sono stati caratterizzati formalmente per la prima volta in due
+studi pubblicati in parallelo nel 2021. Torres et al.\ (\emph{USENIX Security
+2021})\footnote{C.~F. Torres, R. Camino, R. State, ``Frontrunner Jones and the
+Raiders of the Dark Forest: An Empirical Study of Frontrunning on the Ethereum
+Blockchain'', \textit{Proc.\ 30th USENIX Security Symposium}, 2021.
+\url{https://www.usenix.org/conference/usenixsecurity21/presentation/torres}.}
+hanno analizzato oltre 11 milioni di blocchi Ethereum (agosto 2015 -- aprile 2021),
+identificando più di 200.000 attacchi di tipo sandwich per un profitto complessivo
+stimato in circa 18,4 milioni di dollari.
+
+Zhou et al.\ (\emph{IEEE S\&P 2021})\footnote{L. Zhou, K. Qin, C.~F. Torres,
+D.~V. Le, A. Gervais, ``High-Frequency Trading on Decentralized On-Chain Exchanges'',
+\textit{Proc.\ IEEE Symposium on Security and Privacy}, 2021.
+\url{https://arxiv.org/abs/2009.14021}.} hanno sviluppato un framework formale per
+l'analisi degli attacchi ad alta frequenza sugli AMM, dimostrando che il sandwich
+attack è ottimale per un attaccante razionale in presenza di transaction ordering
+manipulation. La condizione di profittabilità per un sandwich attack è:
+\[
+\Delta_{\text{bot}} \cdot (p_1 - p_0) > G_{\text{frontrun}} + G_{\text{backrun}}
+\]
+dove $\Delta_{\text{bot}}$ è la quantità acquistata dal bot nel frontrun,
+$(p_1 - p_0)$ è l'aumento di prezzo indotto dalla transazione della vittima e
+$G_{\text{frontrun}}, G_{\text{backrun}}$ sono i costi gas del bundle. Gli autori
+dimostrano che il profitto del bot cresce monotonicamente con la dimensione della
+transazione della vittima e con il parametro di slippage tolerance impostato.
+
+I dati empirici più recenti (EigenPhi, ottobre 2025)\footnote{\url{https://eigenphi.io}
+--- piattaforma di analisi MEV su Ethereum, consultata maggio~2026.} mostrano uno
+scenario maturo e professionalmente strutturato: circa 515 bot distinti operano su
+Ethereum, di cui circa 100 attivi mensilmente, con un volume di 60.000--90.000
+attacchi al mese su DEX con volumi mensili superiori a 100 miliardi di dollari.
+Il profitto medio per attacco è relativamente basso (circa \$3--\$5), ma la scala
+del fenomeno lo rende economicamente rilevante sia per i singoli utenti colpiti sia
+per l'ecosistema nel suo complesso. La perdita tipica per l'utente vittima si attesta
+nell'ordine dell'1--5\% del valore della transazione, con punte superiori in pool a
+bassa liquidità o con alta tolleranza di slippage.
+
+La \textbf{firma on-chain} di un attacco sandwich è deterministica e verificabile:
+le tre transazioni (frontrun, victim, backrun) compaiono nello stesso blocco o in
+blocchi consecutivi, sullo stesso pool DEX e per la stessa coppia di token, in un
+ordine causalmente vincolato. Questa proprietà distingue il sandwich attack da altre
+tipologie di perdita DeFi --- come gli exploit di smart contract o le perdite da
+liquidazione --- che richiedono interpretazione umana, e rende possibile
+l'automazione completa della verifica.
+
+%------------------------------------------------------------------------
+\subsection{Soluzioni Preventive Esistenti e Limitazioni}
+%------------------------------------------------------------------------
+
+La letteratura e l'industria hanno sviluppato diverse contromisure per ridurre
+l'esposizione agli attacchi sandwich, classificabili in tre categorie principali.
+
+\paragraph{Mempool privati e dark pool.}
+Servizi come Flashbots Protect\footnote{\url{https://protect.flashbots.net} ---
+servizio di protezione MEV di Flashbots, che instrada le transazioni direttamente
+ai builder senza passare per il mempool pubblico.} e MEV Blocker\footnote{\url{https://mevblocker.io}
+--- RPC endpoint con protezione MEV offerto da CoW Protocol.} consentono agli utenti
+di inviare le proprie transazioni attraverso canali privati che bypassano il mempool
+pubblico, rendendo di fatto invisibili ai bot le transazioni in attesa. Questi servizi
+hanno ridotto significativamente l'esposizione agli attacchi frontrunning per gli
+utenti che li adottano, ma soffrono di due limitazioni strutturali: richiedono una
+configurazione tecnica non banale (cambio di RPC endpoint), e non offrono alcun
+meccanismo di compensazione per le perdite già subite o in caso di malfunzionamento.
+
+\paragraph{Protezione tramite slippage tolerance.}
+L'impostazione di una tolleranza di slippage bassa (es.\ 0.1--0.5\%) riduce il
+profitto potenziale del bot, rendendo molti attacchi economicamente non convenienti.
+Tuttavia, su pool a bassa liquidità o per token volatili, una tolleranza troppo bassa
+causa sistematicamente il fallimento delle transazioni (\emph{transaction revert}),
+con conseguente perdita del gas pagato senza completare lo swap. L'utente si trova
+costretto a trovare un equilibrio subottimale tra protezione e usabilità.
+
+\paragraph{Protocolli di batching.}
+Protocolli come CoW Swap\footnote{\url{https://cow.fi} --- exchange decentralizzato
+basato su batch auction, che aggrega gli ordini e li liquida tramite un meccanismo
+di asta che elimina strutturalmente il frontrunning.} aggregano gli ordini in batch
+liquidati tramite meccanismi d'asta, eliminando strutturalmente l'opportunità di
+frontrunning. L'approccio è però compatibile solo con scambi che tollerano una finestra
+di latenza per la raccolta e la liquidazione del batch (tipicamente alcuni minuti) e
+richiede che gli utenti rinuncino all'esecuzione immediata offerta dai DEX tradizionali.
+
+\paragraph{Lacuna residua.}
+Nessuna delle soluzioni preventive esistenti offre \textbf{compensazione economica}
+per gli attacchi già avvenuti. Un utente che non adotta (o non può adottare) misure
+preventive subisce una perdita netta senza possibilità di recupero. MEV Insurance
+interviene esattamente in questo spazio: non prevenendo l'attacco, ma compensando la
+vittima \emph{ex post}, in modo automatico e algoritmico.
+
+%------------------------------------------------------------------------
+\subsection{Assicurazione Decentralizzata: Stato dell'Arte}
+%------------------------------------------------------------------------
+
+L'assicurazione decentralizzata su blockchain è un settore relativamente giovane,
+avviato operativamente con il lancio di Nexus Mutual nel
+2019.\footnote{\url{https://nexusmutual.io} --- principale protocollo di assicurazione
+decentralizzata su Ethereum, lanciato nel 2019.} Il modello di Nexus Mutual è basato
+su un pool di capitali collettivo alimentato dai premi degli assicurati, con verifica
+dei sinistri affidata a un meccanismo di governance distribuita: un comitato di
+assessori (staker di NXM) vota sulla legittimità di ogni claim, con possibilità di
+escalation all'intera comunità. In oltre cinque anni di operatività il protocollo ha
+distribuito circa 18,6 milioni di dollari in rimborsi su oltre 37 milioni di dollari
+di premi raccolti, dimostrando che il modello assicurativo decentralizzato può
+funzionare a scala.
+
+Altri protocolli hanno proposto modelli alternativi: InsurAce\footnote{\url{https://insurace.io}}
+e Unslashed Finance\footnote{\url{https://unslashed.finance}} offrono coperture per
+exploit di smart contract e de-pegging di stablecoin; Bridge Mutual ha introdotto un
+modello di staking bidirezionale in cui i provider di liquidità assumono il rischio dei
+claim. Nessuno di questi protocolli offre tuttavia copertura specifica per gli attacchi
+MEV: la natura della perdita è diversa (non un exploit del contratto assicurato, ma
+un'estrazione esterna) e il meccanismo di verifica richiede competenze blockchain
+specializzate che i sistemi di governance generica non sono attrezzati a esprimere.
+
+Werner et al.\ hanno condotto una revisione sistematica dell'ecosistema DeFi,\footnote{S.
+M. Werner, D. Perez, L. Gudgeon, A. Klages-Mundt, D. Harz, W. J. Knottenbelt,
+``SoK: Decentralized Finance (DeFi)'', \textit{Proc.\ ACM CCS Workshop on Decentralized
+Finance and Security}, 2022. \url{https://arxiv.org/abs/2101.08778}.} evidenziando come
+la mancanza di meccanismi di assicurazione per le perdite da MEV costituisca una lacuna
+rilevante nell'ecosistema, data la loro alta frequenza e il loro impatto diretto sugli
+utenti retail.
+
+%------------------------------------------------------------------------
+\subsection{Lacune della Letteratura e Posizionamento del Contributo}
+%------------------------------------------------------------------------
+
+Dall'analisi della letteratura emergono tre lacune principali. La prima è l'assenza
+di un meccanismo di \textbf{compensazione ex-post} per le perdite da attacchi sandwich:
+le soluzioni esistenti sono tutte preventive e non raggiungono chi non può o non vuole
+modificare il proprio comportamento di trading. La seconda è l'assenza di un protocollo
+assicurativo \textbf{parametrico} per il MEV: parametrico nel senso che la liquidazione
+del sinistro avviene automaticamente sulla base di dati on-chain oggettivi, senza
+richiedere giudizio umano discrezionale. La terza è l'assenza di un sistema che
+combini \textbf{rilevamento automatizzato} degli attacchi e \textbf{liquidazione in
+tempo reale}: Nexus Mutual impiega da tre a sette giorni per la decisione; la firma
+deterministica di un sandwich attack consente invece tempi dell'ordine dei minuti.
+
+MEV Insurance propone un protocollo assicurativo decentralizzato che colma tutte e
+tre le lacune: copertura ex-post, liquidazione parametrica automatizzata e tempi di
+settlement compatibili con la dinamica degli attacchi MEV. Il contributo principale
+è un meccanismo che combina una rete oracle con incentivi economici BFT-resistenti,
+un sistema di fraud detection basato su analisi del grafo delle transazioni on-chain,
+e una formula attuariale dinamica che adatta il premio alle condizioni di mercato in
+tempo reale.
+
+%========================================================================
+\newpage
+\section{Attori del Sistema}
+%========================================================================
+
+Il sistema MEV Insurance è composto da quattro attori principali che interagiscono tra loro:
+l'utente assicurato, la rete di oracle, lo smart contract e il MEV bot. Ogni attore è
+caratterizzato da ruoli, responsabilità e incentivi economici specifici, progettati in modo
+che il comportamento razionale di ciascuno contribuisca al funzionamento equilibrato
+dell'intero protocollo.
+
+\paragraph{Nota sui parametri del protocollo.}
+Il protocollo definisce un insieme di parametri numerici che governano soglie operative,
+incentivi e limiti. Ciascun parametro è stato scelto sulla base di una o più delle seguenti
+fonti di giustificazione: la validazione empirica tramite la simulazione operativa del
+protocollo (vedi Sezione~\ref{sec:simulazioni}), dati on-chain e studi della letteratura
+di settore (EigenPhi,\footnote{\url{https://eigenphi.io} --- piattaforma di analisi MEV su
+Ethereum, consultata maggio~2026.} Flashbots,\footnote{\url{https://flashbots.net} ---
+organizzazione di ricerca sulla MEV e sul block building trasparente.} Chi et al.\ 2024,
+Li et al.\ 2024), oppure considerazioni di design sottoposte alla governance del protocollo.
+I parametri classificati come \emph{governance} sono implementati come costanti aggiornabili
+nello smart contract, consentendo al protocollo di adattarsi all'evoluzione del mercato
+senza richiedere un re-deploy del contratto.
+
+%------------------------------------------------------------------------
+\subsection{Concetti Preliminari}
+\label{sec:preliminari}
+%------------------------------------------------------------------------
+
+\subsubsection{Byzantine Fault Tolerance (BFT)}
+\label{sec:bft}
+
+La \textbf{Byzantine Fault Tolerance} (BFT) è la proprietà di un sistema distribuito di
+funzionare correttamente anche quando una frazione dei partecipanti si comporta in modo
+malevolo o difettoso. Il concetto prende nome dal Problema dei Generali Bizantini,
+formalizzato da Lamport, Shostak e Pease nel 1982,\footnote{L. Lamport, R. Shostak,
+M. Pease, ``The Byzantine Generals Problem'', \textit{ACM Transactions on Programming
+Languages and Systems}, vol.~4, n.~3, 1982, pp.~382--401.} che dimostra come un gruppo di
+attori possa raggiungere il consenso nonostante la presenza di traditori al proprio interno.
+
+Il risultato fondamentale stabilisce che per tollerare $f$ nodi \emph{bizantini} servono
+almeno $n = 3f + 1$ nodi totali, e il consenso richiede un quorum di almeno $2f + 1$ voti
+concordi. Con $f = 1$ bastano quattro nodi e un quorum di tre; con $f = 2$ ne occorrono
+sette e il quorum sale a cinque --- quest'ultimo caso è l'ispirazione diretta per la jury
+di slashing del protocollo, che utilizza la mediana di sette voti.
+
+Quando però la decisione riguarda un fatto oggettivamente verificabile --- ad esempio la
+validità di un token CAPTCHA, controllabile tramite API --- non è necessario un consenso
+BFT completo. In questo caso semplificato è sufficiente un voto a maggioranza con
+$n = 2f + 1$ nodi e quorum $f + 1$: con $f = 1$ bastano tre oracle e due voti concordi.
+La garanzia è più debole rispetto al caso generale (non tollera nodi che mentono
+\emph{e} si coordinano simultaneamente), ma è adeguata quando l'esito corretto può essere
+verificato a posteriori e l'oracle disonesto rischia lo slashing.
+
+Nel protocollo MEV Insurance i principi BFT si applicano in tutti i meccanismi di
+decisione collettiva: la votazione della jury (mediana di $N_{jury} = 7$ voti, caso
+generale con $f = 2$), la verifica CAPTCHA (consenso 2-su-3, caso semplificato con $f = 1$),
+la selezione dei verdetti claim (mediana di $N$ oracle) e la soglia di rigetto pattern
+($\theta_{pattern}$).
+
+\subsubsection{Teoria dei Giochi}
+\label{sec:gametheory}
+
+La \textbf{teoria dei giochi} studia le decisioni strategiche tra agenti razionali i cui
+risultati dipendono dalle scelte di tutti i partecipanti. Nel design di protocolli
+decentralizzati questo strumento è fondamentale perché consente di costruire le regole del
+sistema in modo che il comportamento onesto sia automaticamente conveniente per ciascun
+attore: si parla in questo caso di \textbf{equilibrio di Nash}, ovvero di una situazione
+in cui nessun partecipante ha incentivo a deviare unilateralmente dalla strategia corretta.
+
+Il protocollo MEV Insurance applica questo principio a ogni livello del sistema. Gli oracle
+depositano uno stake che viene parzialmente confiscato in caso di comportamento disonesto:
+il rischio di perdere lo stake supera quindi sistematicamente il beneficio atteso dalla
+manipolazione. I reporter sono incentivati ad avviare segnalazioni fondate perché guadagnano
+una quota dello stake confiscato, ma rischiano di perdere il proprio stake di contestazione
+in caso di segnalazione rigettata. I giurati della jury ricevono un reward fisso
+indipendente dalla percentuale di slash votata, il che elimina ogni incentivo a gonfiare
+le sanzioni. Gli utenti, infine, sono scoraggiati dai claim fraudolenti dalla combinazione
+di FraudScore, blacklist e progressione del tier, che rende il tentativo di truffa più
+costoso del beneficio atteso.
+
+L'obiettivo è che ogni attore, agendo nel proprio interesse economico, contribuisca
+simultaneamente al funzionamento corretto dell'intero sistema.
+
+%========================================================================
+\newpage
+\subsection{User / Policyholder}
+\vspace{0.3cm}
+\noindent\rule{\textwidth}{0.4pt}
+%========================================================================
+
+\subsubsection{Definizione}
+
+L'utente è un trader che opera su exchange decentralizzati (DEX) su Ethereum e desidera
+proteggersi dagli attacchi sandwich acquistando una policy assicurativa. L'utente
+interagisce con il sistema esclusivamente nella veste di assicurato: non ha alcun ruolo
+nella verifica dei claim né nella governance operativa del protocollo.
+
+Il sistema opera su due dimensioni indipendenti. Il \textbf{tier} (Bronze, Silver, Gold,
+Platinum) rappresenta il livello di affidabilità accumulato nel tempo e determina i limiti
+operativi dell'utente: il capitale massimo assicurabile per swap, il numero di swap
+giornalieri consentiti e il punteggio base nel calcolo del FraudScore. Il \textbf{livello
+di copertura} (Low, Medium, High) viene invece scelto dall'utente alla stipula di ogni
+policy e determina sia la percentuale di rimborso in caso di attacco sia il costo del
+premio. Le due dimensioni sono ortogonali: indipendentemente dal proprio tier, ogni utente
+può scegliere liberamente il livello di copertura desiderato.
+
+\subsubsection{Tier e Limiti Operativi}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|p{10cm}|}
+\hline
+\textbf{Tier} & \textbf{Descrizione} \\
+\hline
+Bronze & Tier iniziale. Limite capitale assicurabile $X_{bronze}$, massimo $S_{max,B}$ swap/giorno \\
+\hline
+Silver & Limite $X_{silver} > X_{bronze}$, massimo $S_{max,S}$ swap/giorno \\
+\hline
+Gold & Limite $X_{gold} > X_{silver}$, massimo $S_{max,G}$ swap/giorno \\
+\hline
+Platinum & Limite scelto dall'utente tramite stake ($= \alpha_{stake} \times$ limite desiderato), swap illimitati \\
+\hline
+Blacklistato & Utente identificato come fraudolento, nessun payout consentito \\
+\hline
+\end{tabular}
+\caption{Tier utente nel sistema.}
+\end{table}
+
+I limiti $X_{bronze}$, $X_{silver}$, $X_{gold}$ sono parametri di governance aggiornabili.
+Per il tier Platinum l'utente determina autonomamente il proprio limite depositando uno
+stake pari ad $\alpha_{stake}$ del valore massimo che desidera assicurare: il meccanismo
+è analogo alla \textbf{sovra-collateralizzazione} dei protocolli DeFi di lending.
+Aave,\footnote{\url{https://docs.aave.com/risk/asset-risk/risk-parameters} ---
+documentazione ufficiale sui parametri di rischio Aave.} uno dei principali protocolli di
+prestito decentralizzato su Ethereum, permette ad esempio di prendere in prestito fino
+all'80\% del collaterale depositato (LTV pari all'80\%); analogamente, nel nostro sistema
+lo stake del 20\% funge da garanzia economica che allinea l'interesse dell'utente Platinum
+con quello del pool assicurativo.
+
+\subsubsection{Livelli di Copertura}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Livello Copertura} & \textbf{Rimborso in caso di attacco} & \textbf{Moltiplicatore Premio ($F_{cov}$)} \\
+\hline
+Low & 50\% della perdita & 0.70 \\
+\hline
+Medium & 70\% della perdita & 0.90 \\
+\hline
+High & 100\% della perdita & 1.00 \\
+\hline
+\end{tabular}
+\caption{Livelli di copertura assicurativa. Il rapporto tra $F_{cov}$ e percentuale di
+rimborso è sub-lineare (la copertura Low paga il 70\% del premio base per il 50\% di
+rimborso), incentivando la scelta di coperture più alte e riducendo il rischio di
+anti-selezione. Questo schema è analogo alla struttura di franchigie e coassicurazione
+nelle polizze assicurative tradizionali.}
+\end{table}
+
+\subsubsection{Progressione del Tier}
+
+L'utente entra nel sistema al tier Bronze quando sottoscrive la prima policy. L'upgrade
+al tier successivo avviene automaticamente quando vengono soddisfatte tre condizioni
+simultanee: un numero minimo di swap assicurati completati con successo, un periodo
+minimo di attività nel tier corrente e un FraudScore medio inferiore alla soglia
+prevista. In particolare, il passaggio Bronze\,$\rightarrow$\,Silver richiede almeno
+$N_{swap,BS}$ swap e $D_{min,BS}$ giorni con FraudScore medio $< F_{max,BS}$; il
+passaggio Silver\,$\rightarrow$\,Gold sale a $N_{swap,SG}$ swap e $D_{min,SG}$ giorni
+con FraudScore medio $< F_{max,SG}$.
+
+Le soglie di FraudScore sono matematicamente collegate al base score del tier di partenza:
+poiché Bronze contribuisce con $+50$ punti base, un FraudScore medio inferiore a
+$F_{max,BS}$ implica che le componenti Claim Rate e Network Score abbiano contribuito
+in media meno di $F_{max,BS} - 50$ punti. Lo stesso ragionamento si applica per Silver
+(base $+30$) con la soglia $F_{max,SG}$.
+
+Come esempio pratico: un utente Bronze che esegue in media un swap al giorno raggiunge
+$N_{swap,BS} = 18$ swap in 18 giorni, ma deve comunque attendere il completamento dei
+$D_{min,BS} = 30$ giorni totali. Un utente meno attivo, con tre swap a settimana, arriva
+ai 18 swap in circa sei settimane e soddisfa ampiamente il requisito temporale.
+
+\paragraph{Upgrade a Platinum.}
+Il tier Platinum segue regole distinte rispetto agli altri upgrade. Non sono richiesti
+soglie di swap, giorni di attività né FraudScore: al loro posto, l'utente deve completare
+una \textbf{verifica CAPTCHA} off-chain (eseguita da tre oracle in consenso 2-su-3) e
+depositare uno \textbf{stake} pari ad $\alpha_{stake}$ del limite di swap che intende
+assicurare. Queste due garanzie — identità umana verificata e skin-in-the-game economico —
+sono giudicate sufficienti a sostituire lo storico comportamentale richiesto dagli upgrade
+automatici. L'utente non deve essere inserito in blacklist.
+
+Il token CAPTCHA ha validità di $T_{captcha}$ secondi dalla generazione e deve essere
+sottomesso immediatamente dopo il completamento della verifica; il valore di default
+$T_{captcha} = 120\,\text{s}$ è coerente con i tempi di validità standard dei servizi
+reCAPTCHA di Google.\footnote{\url{https://developers.google.com/recaptcha} --- documentazione
+ufficiale Google reCAPTCHA.}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  tier/.style={rectangle, draw, thick, rounded corners=4pt, minimum width=2cm, minimum height=0.9cm, align=center, font=\small},
+  arr/.style={->, thick, >=stealth}
+]
+\node[tier, fill=orange!35] (br) at (0,0) {\textbf{Bronze}};
+\node[tier, fill=gray!35] (si) at (3.5,0) {\textbf{Silver}};
+\node[tier, fill=yellow!55] (go) at (7,0) {\textbf{Gold}};
+\node[tier, fill=cyan!30] (pl) at (10.5,0) {\textbf{Platinum}};
+\node[tier, fill=red!35, minimum width=2.4cm] (bl) at (5.25,-2.8) {\textbf{Blacklist}};
+
+\draw[arr, green!60!black] (br.east) -- node[above, font=\scriptsize]{storico} (si.west);
+\draw[arr, green!60!black] (si.east) -- node[above, font=\scriptsize]{storico} (go.west);
+\draw[arr, green!60!black] (go.east) -- node[above, font=\scriptsize]{\scriptsize stake+CAPTCHA} (pl.west);
+
+\draw[arr, red!70!black] (br.south) |- (bl.west);
+\draw[arr, red!70!black] (si.south) -- (bl.north);
+\draw[arr, red!70!black] (go.south) |- (bl.east);
+\draw[arr, red!70!black] (pl.south) .. controls (10.5,-1.5) and (8.5,-2.8) .. (bl.east);
+\node[right, font=\scriptsize, red!80!black] at (bl.east) {\;FS $> \theta_{reject}$};
+
+\draw[->, dashed, thick, gray!70] (bl.south) -- ++(0,-0.6) |- (br.south);
+\node[below, font=\tiny, gray!60] at (2.5,-3.4) {saldo debito $\to$ riattivazione};
+\end{tikzpicture}
+\caption{Progressione del tier. Gli upgrade automatici (frecce verdi) richiedono soglie di swap completati, giorni di attività e FraudScore medio; Gold→Platinum richiede stake e verifica CAPTCHA. Qualsiasi tier con FS $> \theta_{reject}$ viene spostato in Blacklist; il debito va saldato per la riattivazione.}
+\end{figure}
+
+\paragraph{Gestione Claim.}
+Per avanzare un claim il trader sottomette allo smart contract gli hash delle tre
+transazioni che compongono il sandwich (frontrun, victim, backrun). Gli oracle verificano
+off-chain la validità del pattern e calcolano il FraudScore; lo smart contract aggrega i
+verdetti e prende la decisione finale. Se il claim viene approvato, l'utente riceve il
+rimborso nella percentuale corrispondente al livello di copertura scelto (50\%, 70\% o
+100\% della perdita effettivamente subita). Il gas pagato per la transazione
+\texttt{submitClaim} viene rimborsato dal pool come parte del payout, rendendo il claim a
+costo zero per l'utente legittimo.
+
+\paragraph{Gestione della Blacklist.}
+Un utente inserito in blacklist a seguito di un FraudScore superiore a $\theta_{reject}$
+non può ricevere payout finché non salda il debito accumulato, maggiorato della penale
+$\delta_{penale}$.
+
+\subsubsection{Dati On-Chain}
+
+Lo smart contract mantiene, per ogni utente, l'indirizzo Ethereum, il tier corrente, lo
+stato della policy (attiva/scaduta), i timestamp di inizio e scadenza, i contatori degli
+swap assicurati e dei claim (totali, approvati, rigettati), il FraudScore medio calcolato
+su tutti i claim, il flag di blacklist, l'eventuale debito accumulato e la data di
+inserimento in blacklist. Questi dati sono pubblici e verificabili on-chain da qualsiasi
+partecipante.
+
+\medskip
+La struttura dati \texttt{UserProfile} in \texttt{DataTypes.sol} definisce esattamente
+questi campi on-chain:
+
+\begin{lstlisting}[caption={\texttt{UserProfile} in \texttt{DataTypes.sol} (campi principali).}]
+struct UserProfile {
+    Tier    tier;          // Bronze / Silver / Gold / Platinum
+    uint256 totalSwaps;
+    uint256 avgFraudScore; // media mobile aggiornata ad ogni claim
+    bool    isBlacklisted;
+    uint256 debt;          // da saldare per uscire dalla blacklist
+    // ...
+}
+\end{lstlisting}
+
+\subsubsection{Incentivi Economici}
+
+Il beneficio principale per l'utente è la protezione economica contro gli attacchi
+sandwich, con rimborso nella percentuale corrispondente al livello di copertura scelto.
+Il costo è il premio calcolato dinamicamente dalla formula descritta nella
+Sezione~\ref{sec:formula-premio}. Il rischio è l'inserimento in blacklist e il conseguente
+accumulo di debito in caso di comportamento fraudolento rilevato dalla rete oracle.
+
+%========================================================================
+\newpage
+\subsection{Oracle}
+\vspace{0.3cm}
+\noindent\rule{\textwidth}{0.4pt}
+%========================================================================
+
+\subsubsection{Definizione}
+
+L'oracle è un operatore tecnico indipendente che gestisce un nodo di verifica per la rete
+MEV Insurance. Gli oracle sono entità completamente separate dagli utenti assicurati e
+hanno la responsabilità esclusiva di verificare la validità dei claim attraverso l'analisi
+off-chain delle transazioni blockchain. Per diventare oracle è necessario depositare uno
+stake minimo definito dal contratto, avere la capacità tecnica di operare un nodo di
+monitoraggio 24/7, possedere le competenze necessarie per l'analisi blockchain e non
+risultare in blacklist.
+
+\subsubsection{Protezione dell'Identità Oracle}
+
+Poiché l'identità di ogni oracle è legata al suo indirizzo Ethereum, un operatore malevolo
+potrebbe in linea di principio abbandonare un indirizzo dopo uno slashing e rientrare nel
+sistema con un nuovo indirizzo, azzerando il proprio storico di reputazione. Il sistema
+adotta tre meccanismi per rendere questo comportamento economicamente non conveniente.
+
+Il primo è un \textbf{cooldown sullo stake}: quando un oracle si ritira o viene rimosso,
+lo stake rimane bloccato nel contratto per un periodo $T_{cooldown}$ (default: 30 giorni,
+coerente con il meccanismo di uscita del processo di validazione di Ethereum PoS, circa
+27 giorni\footnote{\url{https://ethereum.org/en/staking/withdrawals/} --- documentazione
+ufficiale Ethereum sui withdrawal delay dei validator.}). Un operatore che abbandona il
+proprio indirizzo per eludere uno slashing imminente perde l'accesso ai propri fondi per
+almeno 30 giorni, mentre la procedura di contestazione può concludersi e confiscare lo
+stake bloccato.
+
+Il secondo è un \textbf{ritardo di attivazione}: un oracle appena registrato entra in uno
+stato ``In Attesa'' e non è sorteggiabile fino allo scadere di $T_{activation}$ (default:
+7 giorni, analogo alla coda di attivazione dei validator Ethereum\footnote{\url{https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/} --- meccanismo
+di consenso Proof-of-Stake di Ethereum.}). Questo impedisce la creazione di identità
+di breve durata finalizzate a manipolare un singolo claim specifico.
+
+Il terzo è la \textbf{scalatura logaritmica dello stake minimo} in funzione del numero di
+oracle già attivi:
+\[
+\text{StakeRequired} = \text{BaseStake} \times \log(1 + N_{\text{oracle attivi}})
+\]
+Se lo stake fosse costante, un attaccante con budget $B$ potrebbe registrare
+$B/\text{stake}$ identità false a costo lineare. La funzione logaritmica aumenta il costo
+marginale di ogni nuova identità senza disincentivare eccessivamente gli oracle legittimi.
+
+\medskip
+Le funzioni di registrazione, attivazione e selezione casuale sono implementate in
+\texttt{OracleRegistry.sol}:
+
+\begin{lstlisting}[caption={Stake minimo logaritmico e sorteggio casuale in \texttt{OracleRegistry.sol}.}]
+// Registrazione: stake minimo cresce con il numero di oracle attivi
+uint256 minStake = getMinimumStake(); // BaseStake * log(1 + N_attivi)
+require(msg.value >= minStake, "Insufficient stake");
+oracleData[msg.sender].status = OracleStatus.Pending; // attesa T_activation
+
+// Sorteggio: Fisher-Yates su seed derivato da block.prevrandao (RANDAO)
+uint256 idx = uint256(keccak256(abi.encodePacked(_seed, i))) % remaining;
+selected[i]   = eligible[idx];
+eligible[idx] = eligible[--remaining]; // swap-and-shrink
+\end{lstlisting}
+
+\subsubsection{Stati Possibili}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Stato} & \textbf{Descrizione} \\
+\hline
+Inattivo & Oracle registrato ma non operativo \\
+\hline
+In Attesa & Oracle in attesa del ritardo di attivazione ($T_{activation}$) \\
+\hline
+Attivo & Oracle operativo, sorteggiabile per claim \\
+\hline
+In Watchlist & Oracle con score di scostamento elevato, monitorato \\
+\hline
+In Contestazione & Oracle segnalato, in attesa della votazione della jury \\
+\hline
+Slashato & Oracle sanzionato, stake parzialmente confiscato \\
+\hline
+Espulso & Oracle rimosso permanentemente (slashing $> \theta_{expulsion}$ o mancato reintegro) \\
+\hline
+\end{tabular}
+\caption{Stati possibili di un oracle.}
+\end{table}
+
+Un oracle si considera \textbf{inattivo} nel momento in cui viene sorteggiato per un claim
+ma non sottomette il proprio verdetto entro il timeout previsto. L'inattività occasionale
+è tollerata (downtime tecnico, problemi di connettività), ma pattern sistematici di assenza
+selettiva indicano comportamento malevolo e possono portare a una segnalazione per
+``Inattività Selettiva'' con conseguente slashing da parte della jury.
+
+\subsubsection{Responsabilità}
+
+Gli oracle svolgono cinque funzioni fondamentali. La prima è il \textbf{monitoraggio
+continuo} degli eventi emessi dallo smart contract: ogni oracle ascolta 24/7 la blockchain
+in attesa di nuovi claim da valutare. La seconda è l'\textbf{analisi off-chain}: quando
+sorteggiato, l'oracle recupera le tre transazioni del sandwich dalla blockchain, verifica
+la struttura del pattern, calcola la perdita effettiva e assegna un FraudScore. La terza
+è la \textbf{sottomissione on-chain} del verdetto tramite il protocollo commit-reveal
+(descritto di seguito). La quarta è il \textbf{peer monitoring}: ogni oracle può segnalare
+un collega con comportamento anomalo, avviando una procedura di slashing. La quinta è la
+\textbf{verifica CAPTCHA} per gli upgrade al tier Platinum, eseguita off-chain chiamando
+le API del servizio per confermare autenticità, validità temporale e unicità del token.
+
+\newpage
+\subsubsection{Protocollo Commit--Reveal}
+\label{sec:commit-reveal}
+
+Per impedire che un oracle osservi le sottomissioni altrui prima di inviare la propria ---
+adattando opportunisticamente il proprio valore --- il sistema adotta un protocollo a
+due fasi \textbf{commit--reveal} per tutte le sottomissioni numeriche collettive.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=1.2cm,
+  box/.style={rectangle, draw, thick, fill=blue!10, minimum width=3.8cm, minimum height=1cm, align=center, font=\small},
+  arrow/.style={->, thick, >=stealth}
+]
+\node[box] (p1) at (0,0) {\textbf{Fase 1 — Commit}\\Oracle invia\\$\texttt{keccak256}(\text{val}\,\|\,r)$};
+\node[box, right=2.5cm of p1] (p2) {\textbf{Fase 2 — Reveal}\\Oracle rivela\\$(\text{val}, r)$};
+\node[box, right=2.5cm of p2] (p3) {\textbf{Aggregazione}\\Contratto verifica\\e calcola mediana};
+
+\draw[arrow] (p1) -- (p2) node[midway, above, font=\scriptsize] {\shortstack{tutti hanno inviato\\il commit}};
+\draw[arrow] (p2) -- (p3) node[midway, above, font=\scriptsize] {\shortstack{tutti hanno\\rivelato}};
+
+\node[below=0.6cm of p1, font=\scriptsize, text width=3.8cm, align=center] {Nessuno conosce\\il valore degli altri};
+\node[below=0.6cm of p2, font=\scriptsize, text width=3.8cm, align=center] {Contratto verifica\\hash $=$ commit};
+\node[below=0.6cm of p3, font=\scriptsize, text width=3.8cm, align=center] {Valori non verificati\\sono scartati};
+\end{tikzpicture}
+\caption{Protocollo commit--reveal: il valore effettivo viene nascosto nella fase 1 e rivelato solo nella fase 2, impedendo adattamenti opportunistici.}
+\end{figure}
+
+Nella \textbf{Fase 1 (Commit)} l'oracle calcola un hash del proprio valore combinato con
+un valore casuale scelto localmente e sottomette solo l'hash on-chain:
+\[
+\text{commit} = \texttt{keccak256}(\text{valore} \mathbin{\|} r)
+\]
+In questa fase nessun altro partecipante conosce il valore effettivo. La funzione
+\texttt{keccak256} è la funzione di hash crittografica nativa di Ethereum, appartenente
+alla famiglia SHA-3: dato un input di qualsiasi lunghezza, produce un output deterministico
+di 256 bit praticamente impossibile da invertire.
+
+Nella \textbf{Fase 2 (Reveal)}, dopo che tutti gli oracle hanno sottomesso il commit (o
+è scaduto il timeout), ciascuno rivela la coppia \texttt{(valore, r)}. Lo smart contract
+verifica la corrispondenza con il commit originale; se la verifica fallisce, la
+sottomissione è scartata e l'oracle penalizzato con uno scostamento massimo. Solo i valori
+verificati concorrono al calcolo della mediana finale.
+
+Il protocollo commit--reveal si applica alla sottomissione dei FraudScore per la
+valutazione dei claim, all'aggiornamento giornaliero di $P_{att}$, alla votazione della
+jury nelle procedure di slashing e alla verifica dei token CAPTCHA per gli upgrade Platinum.
+Questo elimina ogni vantaggio informativo derivante dall'attendere le sottomissioni altrui,
+rendendo il coordinamento collusivo significativamente più difficile.
+
+\medskip
+Il codice Solidity seguente mostra l'implementazione delle due fasi nel contratto
+\texttt{MEVInsurance.sol}:
+
+\begin{lstlisting}[caption={Verifica crittografica nella fase reveal di \texttt{MEVInsurance.sol}.}]
+// Fase 1 -- commit: l'oracle invia solo l'hash, il valore resta nascosto
+claimCommits[_claimId][msg.sender] = _commitHash;
+
+// Fase 2 -- reveal: il contratto verifica che hash(score||valid||salt) == commit
+require(
+    keccak256(abi.encodePacked(_fraudScore, _patternValid, _salt)) == commit,
+    "Hash mismatch"
+);
+claimsArray[_claimId].revealedScores.push(_fraudScore);
+\end{lstlisting}
+
+\subsubsection{Verifica CAPTCHA per Upgrade Platinum}
+
+Quando un utente richiede l'upgrade a Platinum, lo smart contract sorteggia casualmente
+tre oracle tramite RANDAO\footnote{RANDAO è il meccanismo di generazione di numeri casuali
+verifiable on-chain introdotto da Ethereum PoS. Cfr.\
+\url{https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/block-proposal/}}
+per eseguire la verifica CAPTCHA off-chain in parallelo. L'utente completa il CAPTCHA nel
+frontend, riceve il token di verifica (validità $T_{captcha}$ secondi) e invoca
+immediatamente \texttt{requestPlatinum(token)}. Lo smart contract verifica che l'utente non
+sia in blacklist, sorteggia i tre oracle e emette l'evento \texttt{CaptchaVerificationRequest}.
+Ciascuno dei tre oracle chiama indipendentemente l'API del servizio CAPTCHA per
+confermare autenticità e validità temporale del token; i verdetti vengono sottomessi
+on-chain con firma e il contratto applica la regola di consenso 2-su-3: se almeno due
+oracle approvano l'upgrade è autorizzato, altrimenti è negato.
+
+Ogni oracle riceve un reward fisso $R_{claim}$ per la verifica, indipendentemente
+dall'esito. La protezione anti-frode prevede che, se un oracle dichiara un token non
+valido ma l'utente dispone di prova di validità (timestamp $< T_{captcha}$ secondi), possa
+avviare una contestazione; una jury verifica il token tramite l'API CAPTCHA e, se risulta
+valido, l'oracle viene slashato del 30--50\%. Ogni token CAPTCHA è utilizzabile una sola
+volta: l'API restituisce esito negativo se già verificato in precedenza.
+
+\newpage
+\subsubsection{Score Oracle e Watchlist}
+
+Ogni oracle possiede uno \textbf{score di scostamento} che misura quanto frequentemente i
+suoi verdetti si discostano dalla mediana del gruppo. Lo score accumula i discostamenti
+assoluti su tutti i claim valutati e viene periodicamente azzerato per gli oracle attivi
+($T_{reset,attivo}$), mentre persiste per quelli sotto osservazione.
+
+La \textbf{watchlist} è una classifica pubblica degli oracle con score elevato. Un oracle
+in watchlist subisce il blocco dello stake (non ritirabile), una riduzione proporzionale
+dei reward e un periodo minimo di osservazione prima di poter uscire. La formula di
+penalizzazione dei reward è:
+\[
+\text{Reward} =
+\begin{cases}
+\text{Reward Base} \times \left(0.50 + \dfrac{(\text{Posizione} - 1) \times 0.40}{99}\right) & \text{se Posizione} \leq 99 \\[10pt]
+\text{Reward Base} \times 0.90 & \text{se Posizione} \geq 100
+\end{cases}
+\]
+Il reward varia così dal 50\% del base (posizione 1, score più alto) al 90\% (dalla
+posizione 100 in poi).
+
+\medskip
+La registrazione dello scostamento e l'ingresso automatico in watchlist sono
+implementati in \texttt{OracleRegistry.recordDeviation}:
+
+\begin{lstlisting}[caption={Accumulo scostamento e ingresso automatico in watchlist (\texttt{OracleRegistry.sol}).}]
+info.deviationScore += _absoluteDeviation;
+if (_absoluteDeviation >= deltaWatchlist) {
+    info.watchlistStrikes++;
+    // dopo k_watchlist strike l'oracle passa automaticamente in Watchlisted
+    if (info.watchlistStrikes >= kWatchlist)
+        info.status = OracleStatus.Watchlisted;
+}
+\end{lstlisting}
+
+\newpage
+\subsubsection{Sistema di Fraud Detection}
+\label{sec:fraud-detection}
+
+Il sistema di fraud detection è l'algoritmo che ogni oracle implementa nel proprio software
+off-chain per analizzare i claim e calcolare il FraudScore. Gli oracle eseguono l'analisi
+completa delle transazioni blockchain, applicano i pattern di rilevamento frodi e
+sottomettono il risultato on-chain; lo smart contract aggrega i verdetti calcolando la
+mediana. La mediana è robusta rispetto agli outlier individuali, ma rimane vulnerabile a
+scenari di collusione. Per rilevare questi casi, il sistema integra un
+\textbf{controllo di dispersione}: se la distanza tra massimo e minimo dei verdetti supera
+la soglia $\Delta_{dispersione}$, il claim entra in una fase di revisione secondaria in
+cui lo smart contract sorteggia tramite RANDAO un insieme aggiuntivo di oracle, il cui
+apporto diluisce il peso del gruppo originale.
+
+\paragraph{Formula Generale del FraudScore}
+
+\[
+\textbf{FraudScore} = \text{Score Tier} + \text{Score Claim Rate} + \text{Score Network}
+\]
+
+Il range complessivo è 0--130 punti (50 + 30 + 50), ottenuto dalla somma dei massimi
+delle tre componenti. Le soglie decisionali sono:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={rectangle, draw, thick, minimum width=3cm, minimum height=1cm, align=center, font=\small},
+  comp/.style={rectangle, draw, thick, fill=blue!15, minimum width=2.8cm, minimum height=1cm, align=center, font=\scriptsize},
+  arrow/.style={->, thick, >=stealth}
+]
+\node[comp] (tier) at (0,0) {\textbf{Tier}\\$0\text{--}50$ pt};
+\node[comp, right=0.5cm of tier] (cr) {\textbf{Claim Rate}\\$0\text{--}30$ pt};
+\node[comp, right=0.5cm of cr] (net) {\textbf{Network BFS}\\$0\text{--}50$ pt};
+
+\node[box, fill=orange!20, right=1.5cm of net] (fs) {\textbf{FraudScore}\\$0\text{--}130$};
+
+\draw[arrow] (tier.east) -- (fs.north west);
+\draw[arrow] (cr.east) -- (fs.west);
+\draw[arrow] (net.east) -- (fs.south west);
+
+\node[below=1.8cm of tier, font=\scriptsize, text width=2.8cm, align=center] (tl) {Platinum=0\\Gold=15\\Silver=30\\Bronze=50};
+\node[below=1.8cm of cr, font=\scriptsize, text width=2.8cm, align=center] (crl) {$<6\%$: 0\\$<10\%$: 15\\$<20\%$: 20\\$<30\%$: 25\\$\geq30\%$: 30};
+\node[below=1.8cm of net, font=\scriptsize, text width=2.8cm, align=center] (nl) {d=0: 0\\d=1: 50\\d=2: 30\\d=3: 15\\$d\geq4$: $\max(5,16-d)$};
+
+\draw[dashed] (tier.south) -- (tl.north);
+\draw[dashed] (cr.south) -- (crl.north);
+\draw[dashed] (net.south) -- (nl.north);
+
+\node[below=0.4cm of fs, font=\scriptsize, text width=2.8cm, align=center, fill=green!10, draw] {$<\theta_{app}$: OK\\$\theta_{app}\text{--}\theta_{rej}$: CAPTCHA\\$>\theta_{rej}$: BLACKLIST};
+\end{tikzpicture}
+\caption{Componenti del FraudScore e soglie decisionali ($\theta_{approve} = 60$, $\theta_{reject} = 80$).}
+\end{figure}
+
+\begin{itemize}
+    \item FraudScore $< \theta_{approve}$: claim \textbf{approvato} automaticamente (per Gold/Platinum; Bronze e Silver richiedono sempre CAPTCHA indipendentemente dal FraudScore)
+    \item $\theta_{approve} \leq$ FraudScore $\leq \theta_{reject}$: richiesta \textbf{CAPTCHA}
+    \item FraudScore $> \theta_{reject}$: claim \textbf{rigettato}, utente inserito in blacklist
+\end{itemize}
+
+I valori di default $\theta_{approve} = 60$ e $\theta_{reject} = 80$ discriminano
+correttamente i profili di rischio: un utente Gold con comportamento pulito ottiene
+FraudScore $= 15 + 0 + 0 = 15$ (ben sotto il 60), mentre un Bronze sospetto con claim
+rate elevato e connessione indiretta con bot raggiunge $50 + 20 + 15 = 85$, correttamente
+sopra la soglia 80.
+
+\paragraph{1. Score Tier (0--50 punti).}
+Ogni tier ha un base score che riflette il livello di fiducia riposto nell'utente. La scala
+è decrescente e non lineare: la fiducia nel sistema cresce in modo non lineare con
+l'esperienza accumulata, analogamente ai sistemi di reputazione delle piattaforme
+consolidate.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|c|l|}
+\hline
+\textbf{Tier} & \textbf{Score} & \textbf{Motivazione} \\
+\hline
+Bronze & +50 & Nuovo utente, rischio elevato, nessuno storico \\
+\hline
+Silver & +30 & Reputazione in costruzione, ha superato $N_{swap,BS}$ swap e $D_{min,BS}$ giorni \\
+\hline
+Gold & +15 & Utente affidabile con storico positivo esteso \\
+\hline
+Platinum & +0 & Utente verificato (CAPTCHA) con stake economico depositato \\
+\hline
+\end{tabular}
+\caption{Score base per tier.}
+\end{table}
+
+\paragraph{2. Score Claim Rate (0--30 punti).}
+Il Claim Rate misura il rapporto tra claim sottomessi e swap totali assicurati:
+\[
+\text{Claim Rate} = \frac{\text{Total Claims}}{\text{Total Swap Assicurati}}
+\]
+Le soglie sono calibrate rispetto al tasso empirico di attacchi sandwich. Secondo i dati
+EigenPhi (novembre 2024 -- ottobre 2025), la frequenza di attacchi si attesta su
+60.000--90.000 al mese su volumi DEX mensili superiori a \$100 miliardi, con un Claim Rate
+di mercato nell'ordine del 2--5\%. Un claim rate individuale significativamente superiore
+a $P_{att}$ è pertanto anomalo.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|l|}
+\hline
+\textbf{Claim Rate} & \textbf{Score} & \textbf{Interpretazione} \\
+\hline
+$> 30\%$ & +30 & $\geq 6\times P_{att}$: estremamente sospetto \\
+\hline
+$> 20\%$ & +25 & $\geq 4\times P_{att}$: molto sospetto \\
+\hline
+$> 10\%$ & +20 & $\geq 2\times P_{att}$: sospetto \\
+\hline
+$\leq 10\%$ & +15 & Entro $2\times P_{att}$: elevato ma plausibile \\
+\hline
+$< 6\%$ & +0 & Coerente con $P_{att}$ di mercato \\
+\hline
+\end{tabular}
+\caption{Score basato su claim rate. Soglie calibrate su $P_{att} \approx 2\text{--}5\%$.}
+\end{table}
+
+\paragraph{3. Score Network (0--50 punti).}
+Viene costruito un grafo delle transazioni dove i nodi sono indirizzi Ethereum e gli archi
+sono transazioni dirette. L'oracle esegue una ricerca BFS (Breadth-First Search) dal nodo
+utente verso tutti i bot MEV noti presenti in blacklist pubblica. Per ogni bot raggiungibile
+viene calcolata la distanza minima, e lo score è inversamente proporzionale a essa: più un
+utente è vicino a un bot nel grafo delle transazioni, più alto è il suo score di rischio.
+Gli indirizzi di contratti noti e legittimi (router di Uniswap, Sushiswap, Curve, ecc.)
+sono inseriti in una whitelist pubblica ed esclusi come nodi intermedi nella BFS, poiché
+praticamente tutti gli utenti DeFi vi transitano e un cammino attraverso un router comune
+non è significativo.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|p{7cm}|}
+\hline
+\textbf{Distanza} & \textbf{Score} & \textbf{Interpretazione} \\
+\hline
+0 (no path) & +0 & Nessuna connessione con bot MEV \\
+\hline
+1 & +50 & Collegamento diretto con bot (altamente sospetto) \\
+\hline
+2 & +30 & Intermediario comune tra utente e bot \\
+\hline
+3 & +15 & Probabile coincidenza \\
+\hline
+$d \geq 4$ & $\max(5,\; 16-d)$ & Connessione distante; score decresce, minimo 5 \\
+\hline
+\end{tabular}
+\caption{Score basato su distanza nel grafo.}
+\end{table}
+
+\paragraph{Esempio di Calcolo.}
+Un utente Silver con 50 swap assicurati e 8 claim sottomessi, con connessione indiretta a
+un bot MEV attraverso 3 hop, ottiene: Score Tier $= +30$, Score Claim Rate
+$= \frac{8}{50} = 16\% \rightarrow +20$, Score Network (distanza 3) $\rightarrow +15$.
+FraudScore $= 30 + 20 + 15 = 65$, che richiede CAPTCHA prima dell'approvazione.
+
+\medskip
+La decisione finale basata sul FraudScore mediano è implementata in
+\texttt{finalizeClaim} di \texttt{MEVInsurance.sol}:
+
+\begin{lstlisting}[caption={Decisione finale su FraudScore mediano in \texttt{finalizeClaim}.}]
+// Gold/Platinum: approvazione automatica sotto theta_approve
+if (median < thetaApprove)       finalStatus = ClaimStatus.Approved;
+else if (median <= thetaReject)  finalStatus = ClaimStatus.CAPTCHARequired;
+else {                           // score > 80: rigetto + blacklist
+    finalStatus = ClaimStatus.Rejected;
+    userProfiles[claim.user].isBlacklisted = true;
+}
+// Bronze/Silver richiedono sempre CAPTCHA (soglia ignorata)
+\end{lstlisting}
+
+\subsubsection{Incentivi Economici}
+
+L'oracle riceve un reward fisso $R_{claim}$ per ogni claim valutato, indipendentemente
+dall'esito. Il costo è lo stake bloccato e i costi operativi del nodo. Il rischio è lo
+slashing parziale o totale dello stake in caso di comportamento disonesto. I reward sono
+strutturalmente indipendenti dall'importo di slashing eventualmente applicato, eliminando
+ogni incentivo a favorire slashing eccessivi o ingiustificati. Come riferimento, un sistema
+con 100 claim al giorno e $N_{oracle,claim} = 7$ oracle per claim genera un costo di
+$100 \times 7 \times R_{claim}$ in reward giornalieri.
+
+%========================================================================
+\newpage
+\subsection{Smart Contract (MEV Insurance)}
+\vspace{0.3cm}
+\noindent\rule{\textwidth}{0.4pt}
+%========================================================================
+
+\subsubsection{Definizione}
+
+Lo smart contract è il nucleo del sistema, deployato sulla mainnet Ethereum. Gestisce lo
+stato di tutti gli attori, coordina la rete oracle, calcola i premi dinamicamente e
+autorizza i payout. Rappresenta l'autorità centrale del protocollo in modo completamente
+decentralizzato e trasparente.
+
+\subsubsection{Responsabilità}
+
+Le responsabilità dello smart contract si articolano in quattro aree. Sul fronte della
+\textbf{gestione utenti e policy}, il contratto verifica i requisiti per l'acquisto e
+l'upgrade, calcola il premio dinamicamente, mantiene il registro blacklist e traccia gli
+swap assicurati e i claim per ogni utente. Sul fronte della \textbf{gestione claim},
+riceve e valida inizialmente le sottomissioni, emette eventi per notificare la rete oracle,
+raccoglie e aggrega i verdetti, calcola la mediana del FraudScore, gestisce il rigetto
+immediato per pattern sandwich invalidi e, quando il claim è approvato, autorizza il payout.
+
+Sul fronte della \textbf{gestione oracle}, accetta lo stake dai nuovi partecipanti, seleziona
+tramite RANDAO il sottoinsieme di oracle per ogni claim, distribuisce i reward fissi,
+gestisce watchlist e score di scostamento ed esegue le procedure di slashing. Sul fronte
+della \textbf{gestione del pool}, monitora il Solvency Ratio e adegua il margine del
+premio in risposta alla situazione di solvibilità.
+
+\subsubsection{Il Pool Assicurativo}
+
+Il pool è il saldo aggregato in ETH detenuto dallo smart contract, che funge da riserva
+per payout e reward. Le entrate provengono dai premi versati dagli utenti e dalla quota
+$\pi_{pool}$ degli stake confiscati durante le procedure di slashing. Le uscite comprendono
+i payout ai claim approvati (con eventuale rimborso del gas di \texttt{submitClaim}), i
+reward fissi agli oracle per valutazione claim, aggiornamento $P_{att}$ e verifica CAPTCHA,
+i reward alla jury per le procedure di slashing, e gli eventuali rimborsi gas agli oracle
+quando il gas price supera la soglia $\gamma_{min}$ (vedi Sezione~\ref{sec:gas-analysis}).
+
+Il flusso di cassa è illustrato schematicamente di seguito:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={rectangle, draw, thick, minimum width=3cm, minimum height=1cm, align=center, font=\small},
+  arrow/.style={->, thick, >=stealth}
+]
+\node[box, fill=yellow!20, minimum width=3cm, minimum height=1.5cm] (pool) at (0,0) {\textbf{POOL}\\(riserva ETH)};
+
+\node[box, fill=green!15, minimum width=2.5cm] (in1) at (-4, 0.7) {Premi utenti};
+\node[box, fill=green!15, minimum width=2.5cm] (in2) at (-4,-0.7) {Slashing $\pi_{pool}$};
+
+\node[box, fill=red!15, minimum width=2.5cm] (out1) at (4, 1.5) {Payout claim};
+\node[box, fill=red!15, minimum width=2.5cm] (out2) at (4, 0.5) {Reward oracle};
+\node[box, fill=red!15, minimum width=2.5cm] (out3) at (4,-0.5) {Reward jury};
+\node[box, fill=red!15, minimum width=2.5cm] (out4) at (4,-1.5) {Rimborso gas};
+
+\draw[arrow, green!70!black] (in1) -- (pool);
+\draw[arrow, green!70!black] (in2) -- (pool);
+\draw[arrow, red!70!black] (pool) -- (out1);
+\draw[arrow, red!70!black] (pool) -- (out2);
+\draw[arrow, red!70!black] (pool) -- (out3);
+\draw[arrow, red!70!black] (pool) -- (out4);
+\end{tikzpicture}
+\caption{Flussi di cassa del pool assicurativo: entrate (verde) e uscite (rosso).}
+\end{figure}
+
+\subsubsection{Monitoraggio Solvibilità}
+
+Il sistema calcola il rapporto di solvibilità per garantire la sostenibilità del pool:
+\[
+\text{Solvency Ratio (SR)} = \frac{\text{Saldo Pool}}{\text{Passività Totali} + \text{Claim Attesi}_{7gg}}
+\]
+dove le Passività Totali includono i claim già sottomessi in attesa di approvazione,
+e i Claim Attesi$_{7gg}$ rappresentano la stima dei payout previsti nei prossimi 7 giorni,
+calcolata proiettando i dati osservati nelle ultime 24 ore con aggiustamento per la
+crescita o decrescita delle policy attive:
+\[
+\text{Claim Attesi}_{7gg} = \text{Payout}_{24h} \times \frac{N_{\text{policy ora}}}{N_{\text{policy 24h fa}}} \times 7
+\]
+L'orizzonte di 7 giorni bilancia reattività e stabilità, evitando di sovra-reagire a
+picchi giornalieri ma catturando i trend settimanali.
+
+\paragraph{Esempio numerico.}
+Con saldo pool 100 ETH, passività 15 ETH, payout erogati nelle ultime 24h di 5 ETH,
+200 policy attive ora e 150 policy attive 24h fa, il fattore di crescita è
+$\frac{200}{150} = 1.33$, i claim attesi sono $5 \times 1.33 \times 7 = 46.67$ ETH e
+il Solvency Ratio risulta $SR = \frac{100}{15 + 46.67} = 1.62$. Poiché $1.62 \geq SR_{safe}$,
+il margine $M_{adj}$ rimane a 0 e il sistema non aumenta i premi.
+
+\medskip
+In \texttt{PremiumCalculator.sol} il Solvency Ratio e l'aggiornamento automatico
+di $M_{adj}$ sono implementati come segue:
+
+\begin{lstlisting}[caption={Solvency Ratio e aggiornamento adattivo di $M_{adj}$ in \texttt{PremiumCalculator.sol}.}]
+// SR = pool / (passivita' + claim attesi 7gg), espresso in bps
+uint256 sr = (poolBalance * 10000) / (pendingLiabilities + expectedClaims7d);
+
+if      (sr >= srSafe)     mAdj = 0;          // SR >= 1.5: nessun aggiustamento
+else if (sr >= srCritical) mAdj = deltaMmed;   // 1.3 <= SR < 1.5
+else                       mAdj = deltaMhigh;  // SR < 1.3: margine massimo
+\end{lstlisting}
+
+\subsubsection{Gestione Pattern Sandwich Invalidi}
+
+Un pattern sandwich valido deve soddisfare cinque condizioni: gli hash delle tre
+transazioni esistono sulla blockchain, le transazioni avvengono nello stesso blocco o
+in blocchi consecutivi, coinvolgono lo stesso pool DEX e coppia di token, si succedono
+nell'ordine corretto (frontrun $\rightarrow$ victim $\rightarrow$ backrun) e appartengono
+ad indirizzi distinti. Quando gli oracle analizzano un claim, oltre al FraudScore
+sottomettono un flag \texttt{patternValid}. Se $\geq \theta_{pattern}$ degli oracle
+sorteggiati dichiara il pattern invalido, il claim viene rigettato immediatamente senza
+payout né richiesta CAPTCHA, marcato come \texttt{INVALID\_PATTERN}. Sotto la soglia
+$\theta_{pattern}$, il flusso normale prosegue con il calcolo della mediana FraudScore.
+
+Il valore di default $\theta_{pattern} = 70\%$ è una soglia di supermajority coerente
+con il requisito BFT di $\frac{2}{3} \approx 66.7\%$, arrotondato a 70\% per
+conservatività. Gli oracle che sbagliano la verifica pattern sono automaticamente
+penalizzati attraverso il sistema di scostamento: un oracle che dichiara valido un
+pattern oggettivamente invalido accumula uno scostamento molto elevato (ad es.\
+$|40 - 130| = 90$ punti) e rischia l'ingresso in watchlist.
+
+\medskip
+La logica di verifica è implementata nella funzione \texttt{finalizeClaim} di
+\texttt{MEVInsurance.sol}:
+
+\begin{lstlisting}[caption={Rigetto immediato per pattern invalido (\texttt{finalizeClaim}).}]
+// Se >= 70% degli oracle vota patternInvalid -> rigetto senza FraudScore
+uint256 invalidBps = (claim.patternInvalidVotes * 10000) / claim.revealCount;
+if (invalidBps >= patternInvalidThresholdBps) { // default 7000 = 70%
+    claim.status = ClaimStatus.InvalidPattern;
+    return; // nessun payout, nessun CAPTCHA
+}
+\end{lstlisting}
+
+\newpage
+\subsubsection{Formula del Premio}
+\label{sec:formula-premio}
+
+Il premio viene calcolato dinamicamente per adattarsi alle condizioni di mercato, alla
+solvibilità del pool, ai costi operativi della rete oracle e al livello di copertura
+scelto dall'utente:
+\[
+P = \max\!\left(\;V \times \left[\underbrace{P_{att} \times L\%}_{\text{rischio attacchi}} + \underbrace{\frac{T_{int} \times \frac{E}{1-E}}{V_{base}}}_{\text{frodi non intercettate}} + \underbrace{\frac{C_{oracle,24h}}{V_{base}}}_{\text{costi operativi}}\right] \times (1 + M) \times F_{cov}\;,\;\; P_{min} \times V\right)
+\]
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  comp/.style={rectangle, draw, thick, fill=blue!12, minimum width=3.2cm, minimum height=0.9cm, align=center, font=\scriptsize},
+  op/.style={rectangle, draw, thick, fill=orange!15, minimum width=4.8cm, minimum height=0.9cm, align=center, font=\scriptsize},
+  res/.style={rectangle, draw, very thick, fill=green!15, minimum width=5cm, minimum height=1cm, align=center, font=\small},
+  arr/.style={->, thick, >=stealth}
+]
+\node[comp] (c1) at (-3.8,0) {$P_{att} \times L\%$\\rischio attacchi};
+\node[comp] (c2) at (0,0) {$\dfrac{T_{int} \cdot E/(1-E)}{V_{base}}$\\frodi non intercettate};
+\node[comp] (c3) at (3.8,0) {$\dfrac{C_{oracle,24h}}{V_{base}}$\\costi oracle};
+
+\node[op] (sum) at (0,-2) {somma dei tre termini $\times\, V$};
+\node[op] (adj) at (0,-3.5) {$\times\,(1 + M_{adj}) \times F_{cov}$};
+\node[res] (out) at (0,-5) {\textbf{Premio} $P = \max\!\left(\,\cdot\,,\; P_{min}\times V\right)$};
+
+\draw[arr] (c1.south) -- ($(sum.north)+(-1.5,0)$);
+\draw[arr] (c2.south) -- (sum.north);
+\draw[arr] (c3.south) -- ($(sum.north)+(1.5,0)$);
+\draw[arr] (sum) -- (adj);
+\draw[arr] (adj) -- (out);
+\end{tikzpicture}
+\caption{Flusso di calcolo del premio $P$: i tre termini (rischio attacchi, frodi non intercettate, costi oracle) vengono sommati e scalati per $V$, poi moltiplicati per il margine solvibilità $(1+M_{adj})$ e il fattore copertura $F_{cov}$, con un pavimento a $P_{min} \times V$.}
+\end{figure}
+
+I parametri della formula sono i seguenti:
+
+\textbf{$V$} è il valore dello swap da assicurare in ETH.
+
+\textbf{$P_{att}$} è la percentuale di attacchi sandwich sul mercato, calcolata su dati
+on-chain pubblici. Secondo dati EigenPhi (novembre 2024 -- ottobre 2025), $P_{att}$ si
+attesta nell'ordine del 2--5\%, con picchi fino al 10\% in periodi di alta attività MEV.
+$P_{att}$ viene aggiornato ogni 24 ore tramite un meccanismo decentralizzato descritto
+nel paragrafo successivo.
+
+\textbf{$L\%$} è la perdita percentuale media per swap attaccato. I bot sofisticati
+estraggono fino al 95\% dello slippage tolerance impostato dall'utente; con tolleranze
+tipiche dell'1--3\% per coppie volatili e dello 0.1--0.5\% per stablecoin, la perdita
+media si colloca tipicamente nell'intervallo 0.5--3\%. Il default conservativo
+$L\% = 0.25$ (25\%) copre scenari di swap con alta tolleranza di slippage o bassa
+liquidità di pool, rappresentando un upper bound prudenziale.
+
+\textbf{$T_{int}$}, \textbf{$E$} e \textbf{$V_{base}$} governano la componente di costo
+delle frodi non intercettate. $T_{int}$ è il valore totale in ETH delle frodi intercettate
+nelle ultime 24 ore; $E$ è il False Negative Rate (FNR) del sistema di fraud detection
+---ovvero la probabilità che una frode sfugga alla detection; $V_{base}$ è il numero
+totale di swap assicurati nelle ultime 24 ore. Il termine
+$T_{int} \times \frac{E}{1-E}$ rappresenta il valore delle frodi non intercettate: se
+il sistema intercetta $T_{int}$ con errore $E$, le frodi intercettate sono $(1-E)$ del
+totale, quindi quelle sfuggite valgono $T_{int} \times \frac{E}{1-E}$.
+
+\textbf{$C_{oracle,24h}$} è il costo oracle totale osservato nelle ultime 24 ore,
+comprendente tutti i reward erogati per valutazione claim, aggiornamento $P_{att}$,
+verifiche CAPTCHA e procedure di slashing. Questo termine garantisce che la formula
+internalizzi automaticamente i costi operativi della rete oracle, evitando che tali costi
+erodano il pool.
+
+\textbf{$M = M_{base} + M_{adj}$} è il margine di maggiorazione. $M_{adj}$ si adatta
+automaticamente al Solvency Ratio del pool:
+\[
+M_{adj} =
+\begin{cases}
+\Delta M_{high} & \text{se } \text{SR} < SR_{critical} \\
+\Delta M_{med} & \text{se } SR_{critical} \leq \text{SR} < SR_{safe} \\
+0.00 & \text{se } \text{SR} \geq SR_{safe}
+\end{cases}
+\]
+
+L'ispirazione per i valori di default ($SR_{safe} = 1.5$, $SR_{critical} = 1.3$) è il
+framework \textbf{Solvency~II} (Direttiva UE 2009/138/CE),\footnote{Direttiva
+2009/138/CE del Parlamento Europeo e del Consiglio del 25 novembre 2009, art.~100--135.
+\url{https://eur-lex.europa.eu/legal-content/IT/TXT/?uri=CELEX:32009L0138}.} che impone
+alle compagnie assicurative europee di mantenere capitale sufficiente a coprire le
+passività con margini proporzionali al rischio. L'analogia è concettuale, non di
+conformità legale: il Solvency Ratio implementa lo stesso principio di ``riserve
+proporzionate al rischio'' in un contesto decentralizzato.
+
+\textbf{$F_{cov}$} è il fattore di copertura: 0.70 per Low, 0.90 per Medium, 1.00 per High.
+
+\textbf{$P_{min} = 1.5\%$} garantisce l'accumulo di riserve anche quando $P_{att}$ è
+molto basso.
+
+\paragraph{Calcolo di $P_{att}$.}
+$P_{att}$ rappresenta la probabilità che uno swap generico su DEX subisca un sandwich
+attack, calcolata su dati on-chain pubblici e non sull'utilizzo del sistema assicurativo:
+\[
+P_{att} = \frac{\text{Sandwich attacks rilevati (ultimi 2 giorni)}}{\text{Total swaps su DEX (ultimi 2 giorni)}} \times (1 + m_s)
+\]
+La finestra di 2 giorni (circa 14.400 blocchi Ethereum) garantisce un campione
+statisticamente significativo pur restando sufficientemente breve da reagire a variazioni
+nell'attività di attacco. Il margine $m_s$ compensa l'incertezza statistica della stima
+campionaria in funzione del volume osservato.
+
+Il meccanismo di aggiornamento avviene ogni 24 ore: lo smart contract emette l'evento
+\texttt{RequestPattUpdate()}, sorteggia $N_{oracle,patt}$ oracle tramite RANDAO, ciascuno
+analizza off-chain la blockchain degli ultimi 2 giorni calcolando il ratio sandwich/swap,
+sottomette il proprio valore tramite il protocollo commit--reveal, e lo smart contract
+calcola la mediana delle stime e aggiorna $P_{att}$ in storage. Ogni oracle partecipante
+riceve reward $R_{claim}$. Per garantire la verificabilità del calcolo, ogni oracle deve
+includere nella sottomissione l'hash del dataset di blocchi analizzato
+($\texttt{keccak256(blockRangeData)}$), registrato on-chain: qualsiasi partecipante
+esterno può ricalcolare il ratio sugli stessi blocchi e confrontare il risultato dichiarato.
+
+\paragraph{Componenti della Formula.}
+I tre termini nel bracket della formula operano su basi temporali diverse ma si combinano
+in un costo unitario per swap. Il primo termine $(P_{att} \times L\%)$ rappresenta il costo
+atteso per coprire gli attacchi sandwich legittimi: con $P_{att} = 5\%$ e $L\% = 25\%$
+vale $0.05 \times 0.25 = 0.0125$ (1.25\% del valore swap). Il secondo termine distribuisce
+su tutti gli swap il costo delle frodi non intercettate, adeguandosi automaticamente al
+tasso di errore del sistema di fraud detection. Il terzo termine distribuisce su tutti gli
+swap il costo operativo degli oracle, garantendo che la rete rimanga incentivata a
+qualsiasi livello di $R_{claim}$ fino al break-even.
+
+\medskip
+L'implementazione Solidity in \texttt{PremiumCalculator.sol} traduce la formula
+direttamente, lavorando interamente con aritmetica intera in basis point (1 bp = 0.01\%):
+
+\begin{lstlisting}[caption={Calcolo del premio in \texttt{PremiumCalculator.calculatePremium} (valori in basis point).}]
+uint256 comp1 = (patt * lPercent) / 10000;          // P_att * L%
+uint256 comp2 = (tint * eFNR) / ((10000-eFNR) * vbase); // frodi non intercettate
+uint256 comp3 = (coracle24h * 10000) / vbase;        // costi oracle
+
+uint256 basePremium = (_swapValue * (comp1+comp2+comp3)
+                       * (10000 + mBase + mAdj)) / 10000 / 10000;
+premium = (basePremium * fcov[_coverageLevel]) / 10000; // applica F_cov
+\end{lstlisting}
+
+\paragraph{Esempio di Calcolo.}
+Con uno swap di $V = 1$ ETH e parametri $P_{att} = 0.05$, $L\% = 0.25$, $T_{int} = 0.008$
+ETH, $E = 0.20$, $V_{base} = 100$ swap, $C_{oracle,24h} = 0.07$ ETH, $M = 0.20$ e
+$F_{cov} = 0.90$ (copertura Medium):
+\[
+P = 1 \times \left[(0.05 \times 0.25) + \frac{0.008 \times 0.25}{100} + \frac{0.07}{100}\right] \times 1.20 \times 0.90 \approx 0.01428 \text{ ETH}
+\]
+Il premio è circa il 1.43\% del valore assicurato. In caso di attacco l'utente
+riceverebbe il 70\% della perdita subita.
+
+\newpage
+\subsubsection{Sistema di Slashing e Watchlist}
+
+Il sistema di slashing è il meccanismo di enforcement che garantisce l'onestà della rete
+oracle attraverso monitoraggio automatico e votazione decentralizzata per le sanzioni.
+
+\paragraph{Score di Scostamento e Watchlist.}
+Ogni oracle accumula uno score dato dalla somma degli scostamenti assoluti dei propri
+verdetti dalla mediana del gruppo:
+\[
+\text{Score Oracle} = \sum_{i=1}^{N} |\text{FraudScore}_i - \text{Mediana}_i|
+\]
+Lo score viene azzerato periodicamente ($T_{reset,attivo}$) per gli oracle attivi, mentre
+persiste per quelli in watchlist (minimo $T_{watchlist}$). Un oracle entra
+automaticamente in watchlist dopo $k_{watchlist}$ scostamenti $\geq \Delta_{watchlist}$
+punti; ne esce dopo $T_{watchlist}$ in assenza di ulteriori scostamenti significativi.
+
+\paragraph{Segnalazione e Prove.}
+Qualsiasi oracle attivo può segnalare un peer depositando uno stake di contestazione
+$C_{report} = R_{claim} \times N_{jury}$ (restituito se la segnalazione è confermata,
+confiscato altrimenti). La segnalazione deve includere prove crittografiche verificabili
+on-chain, che il sistema suddivide in cinque categorie. Gli \textbf{scostamenti sistematici}
+richiedono almeno $N_{prove,min}$ claim con evidenza di pattern unidirezionale consistente:
+un oracle onesto dovrebbe scostarsi casualmente sia sopra sia sotto la mediana, quindi uno
+scostamento sistematicamente nella stessa direzione indica manipolazione. La \textbf{firma
+crittografica anomala} si verifica quando i verdetti presentano firme duplicate o
+riutilizzate per claim diversi, suggerendo automazione malevola. La \textbf{collusione con
+utenti specifici} si dimostra tramite analisi comparativa dello scostamento per i claim di
+un utente determinato rispetto agli altri, accompagnata da transazioni finanziarie
+on-chain tra oracle e utenti favoriti. L'\textbf{inattività selettiva} è dimostrata da
+un tasso di partecipazione generale elevato ma prossimo allo zero per claim che
+coinvolgono un bot MEV specifico. Le \textbf{transazioni finanziarie sospette} identificano
+correlazioni temporali tra pagamenti ricevuti e valutazioni favorevoli.
+
+\paragraph{Jury e Votazione.}
+$N_{jury} = 7$ oracle vengono selezionati tramite RANDAO (nessun membro può essere in
+watchlist); il sorteggio avviene pochi secondi prima dell'inizio per minimizzare la
+finestra di corruzione. La dimensione 7 è ispirata a \textbf{Kleros},\footnote{\url{https://kleros.io}
+--- protocollo di arbitrato decentralizzato su Ethereum che utilizza jury casuali.} un
+protocollo di arbitrato decentralizzato su Ethereum in cui jury sorteggiate casualmente
+votano su dispute commerciali con panel variabili da 3 a 63 juror; il nostro sistema
+adotta $N_{jury} = 7$ come compromesso tra robustezza BFT (tollera $f = 2$ juror
+bizantini) e costo operativo. Ogni juror vota una percentuale di slash (0--100\%); lo
+smart contract calcola la mediana dei voti e, se è positiva, esegue lo slashing.
+
+\paragraph{Distribuzione dello Slashing.}
+Se la mediana è positiva, dallo stake confiscato vengono prima prelevati i reward fissi
+della jury ($R_{claim} \times N_{jury}$); il residuo viene diviso con $\pi_{reporter} = 25\%$
+al reporter e $\pi_{pool} = 75\%$ al pool. Se la mediana è zero (segnalazione rigettata),
+lo stake di contestazione del reporter viene interamente confiscato e distribuito come
+reward alla jury, senza alcun costo per il pool. I reward della jury sono fissi e
+indipendenti dalla percentuale di slash votata, eliminando ogni incentivo a gonfiare le
+sanzioni (principio game-theoretic, Sezione~\ref{sec:gametheory}).
+
+Un oracle slashato oltre la soglia $\theta_{expulsion} = 50\%$ viene espulso
+permanentemente; sotto tale soglia può scegliere tra il reintegro (pagando lo slash e
+depositando un secondo stake completo --- il raddoppio funge da deterrente contro la
+recidiva) o il ritiro definitivo con recupero dello stake residuo dopo il cooldown.
+
+%========================================================================
+\newpage
+\subsection{MEV Bot (Attacker)}
+\vspace{0.3cm}
+\noindent\rule{\textwidth}{0.4pt}
+%========================================================================
+
+\subsubsection{Definizione}
+
+Il MEV Bot è un attore esterno al sistema assicurativo, tipicamente un software
+automatizzato che monitora il mempool Ethereum alla ricerca di opportunità di profitto
+tramite sandwich attacks. Non interagisce direttamente con lo smart contract MEV Insurance,
+ma le sue azioni costituiscono l'evento scatenante per i claim degli utenti vittime.
+
+\subsubsection{Meccanismo di un Sandwich Attack}
+
+Un sandwich attack si sviluppa in tre fasi, tutte eseguite nello stesso blocco o in
+blocchi consecutivi. Il bot monitora continuamente il mempool Ethereum: quando individua
+una transazione di swap pendente con parametri favorevoli (dimensione sufficiente,
+slippage tolerance alto, pool con liquidità adeguata), calcola il profitto potenziale
+dell'operazione e costruisce un \textbf{bundle} di tre transazioni da sottomettere
+al block builder.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.5cm,
+  box/.style={rectangle, draw, thick, minimum width=4.5cm, minimum height=0.9cm, align=center, font=\small},
+  arrow/.style={->, thick, >=stealth}
+]
+
+\node[box, fill=gray!15] (mem) {Mempool\\Tx vittima pendente};
+\node[box, fill=red!20, below=1.2cm of mem] (front) {\textbf{1. Frontrun}\\Bot compra token (gas elevato)};
+\node[box, fill=yellow!20, below=0.7cm of front] (victim) {\textbf{2. Victim Tx}\\Vittima compra a prezzo peggiorato};
+\node[box, fill=red!20, below=0.7cm of victim] (back) {\textbf{3. Backrun}\\Bot vende token con profitto};
+
+\node[box, fill=green!20, right=3.5cm of front, minimum width=3.5cm] (profit) {Profitto bot\\$\approx$ slippage vittima};
+\node[box, fill=red!20, right=3.5cm of victim, minimum width=3.5cm] (loss) {Perdita vittima\\(rimborso se assicurata)};
+
+\draw[arrow] (mem) -- (front);
+\draw[arrow] (front) -- (victim);
+\draw[arrow] (victim) -- (back);
+\draw[arrow, green!60!black] (back.east) -- ++(1.2,0) |- (profit.west);
+\draw[arrow, red!80!black] (victim.east) -- (loss.west);
+
+\node[left=0.3cm of mem, font=\scriptsize, text width=2cm, align=right] {Prezzo\\iniziale $p_0$};
+\node[left=0.3cm of front, font=\scriptsize, text width=2cm, align=right] {Prezzo sale\\a $p_1 > p_0$};
+\node[left=0.3cm of victim, font=\scriptsize, text width=2cm, align=right] {Vittima paga\\$p_1$ invece di $p_0$};
+\node[left=0.3cm of back, font=\scriptsize, text width=2cm, align=right] {Bot incassa\\$p_1 - p_0$};
+\end{tikzpicture}
+\caption{Meccanismo di un sandwich attack: il bot ``avvolge'' la transazione della vittima con frontrun e backrun nello stesso blocco, estraendo valore attraverso la variazione di prezzo indotta.}
+\end{figure}
+
+Secondo dati EigenPhi (ottobre 2025), circa 515 bot distinti operano su Ethereum, di cui
+circa 100 sono attivi mensilmente. Il profitto medio per attacco è estremamente basso
+(circa \$3), ma i volumi elevati --- 60.000--90.000 attacchi al mese --- rendono
+l'attività complessivamente remunerativa. La firma on-chain di un sandwich attack è
+matematicamente inequivocabile: frontrun, victim e backrun compaiono nello stesso blocco
+o in blocchi consecutivi, per lo stesso pool DEX e coppia di token, nell'ordine di
+esecuzione corretto. Questa determinismo rende la verifica automatizzata possibile e
+affidabile, a differenza di altri tipi di perdita DeFi che richiedono giudizio discrezionale.
+
+\subsubsection{Interazione con il Sistema}
+
+Se la vittima è assicurata, il suo indirizzo viene analizzato dagli oracle nel calcolo del
+FraudScore. L'indirizzo del bot viene estratto dalle transazioni frontrun e backrun; se il
+sandwich viene confermato, il bot viene inserito in \textbf{blacklist pubblica}. La
+blacklist è consultabile da altri protocolli per implementare blocchi preventivi e
+costituisce una risorsa pubblica per l'ecosistema DeFi.
+
+%========================================================================
+\newpage
+\section{Parametri di Governance}
+\label{sec:governance-params}
+%========================================================================
+
+La Tabella~\ref{tab:governance-params} riassume tutti i parametri configurabili del
+protocollo con i relativi valori di default e le motivazioni della scelta. Tutti i
+parametri sono implementati come costanti aggiornabili nello smart contract, consentendo
+al protocollo di adattarsi all'evoluzione del mercato senza richiedere un re-deploy.
+I parametri non marcati come ``governance'' sono stati calibrati tramite la simulazione
+operativa del protocollo (Sezione~\ref{sec:simulazioni}) o su dati empirici di letteratura.
+
+\begin{longtable}{|l|c|p{6.5cm}|}
+\hline
+\textbf{Parametro} & \textbf{Default} & \textbf{Motivazione} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Parametro} & \textbf{Default} & \textbf{Motivazione} \\
+\hline
+\endhead
+\hline
+\endfoot
+\multicolumn{3}{|l|}{\textit{Tier System}} \\
+\hline
+$N_{swap,BS}$ (swap B$\to$S) & 18 & $\approx$1 swap / 1.7 giorni in $D_{min,BS}$ giorni \\
+\hline
+$N_{swap,SG}$ (swap S$\to$G) & 55 & $\approx$1 swap / giorno in $D_{min,SG}$ giorni \\
+\hline
+$D_{min,BS}$ (giorni B$\to$S) & 30 & 1 mese di osservazione minima \\
+\hline
+$D_{min,SG}$ (giorni S$\to$G) & 60 & 2 mesi, progressione lineare da $D_{min,BS}$ \\
+\hline
+$F_{max,BS}$ (FraudScore max B$\to$S) & 52 & Base Bronze (+50) + margine 2 punti \\
+\hline
+$F_{max,SG}$ (FraudScore max S$\to$G) & 35 & Base Silver (+30) + margine 5 punti \\
+\hline
+$S_{max,B}$, $S_{max,S}$ (swap/giorno) & 3 & Limite anti-abuse per tier iniziali \\
+\hline
+$S_{max,G}$ (swap/giorno Gold) & 4 & Progressione 3 $\to$ 4 $\to$ illimitato \\
+\hline
+$\alpha_{stake}$ (stake Platinum) & 20\% & Leva 5$\times$, analogo LTV DeFi \\
+\hline
+$\delta_{penale}$ (maggiorazione debito) & 20\% & Penalità deterrente ma non proibitiva \\
+\hline
+\multicolumn{3}{|l|}{\textit{FraudScore e Decisione Claim}} \\
+\hline
+$\theta_{approve}$ & 60 & Discrimina correttamente profili (vedi esempi) \\
+\hline
+$\theta_{reject}$ & 80 & Richiede $\geq 2$ componenti significative \\
+\hline
+$\Delta_{dispersione}$ & 20 & 15.4\% del range, disaccordo significativo \\
+\hline
+$\theta_{pattern}$ & 70\% & Supermajority, $\geq$ BFT $\frac{2}{3}$ \\
+\hline
+\multicolumn{3}{|l|}{\textit{Oracle System}} \\
+\hline
+$N_{oracle,claim}$ (oracle per claim) & 7 & Dispari per mediana non ambigua; tollera $f=2$ nodi bizantini ($3f+1=7$, Sez.~\ref{sec:bft}) \\
+\hline
+$N_{oracle,patt}$ (oracle per agg.\ $P_{att}$) & 5 & Dispari per mediana non ambigua \\
+\hline
+$N_{jury}$ & 7 & Dispari, ispirato a Kleros \\
+\hline
+$T_{cooldown}$ & 30 gg & Analogo withdrawal Ethereum PoS ($\sim$27gg) \\
+\hline
+$T_{activation}$ & 7 gg & Previene attacchi just-in-time \\
+\hline
+$\Delta_{watchlist}$ & 10 pt & 7.7\% del range FraudScore \\
+\hline
+$k_{watchlist}$ & 2 & Tolleranza: 1 errore $\neq$ pattern \\
+\hline
+$T_{watchlist}$ & 90 gg & Trimestre di osservazione \\
+\hline
+$T_{reset,attivo}$ & 30 gg & Reset mensile, previene accumulo \\
+\hline
+\multicolumn{3}{|l|}{\textit{Reward e Slashing}} \\
+\hline
+$R_{claim}$ & 0.002 ETH & Copertura costi (claim e jury) \\
+\hline
+$C_{report}$ & 0.014 ETH & $= R_{claim} \times N_{jury}$, copre reward jury \\
+\hline
+$\pi_{pool}$ / $\pi_{reporter}$ & 75\% / 25\% & Game theory (Sez.~\ref{sec:gametheory}): reporter incentivato \\
+\hline
+$\theta_{expulsion}$ & 50\% & $>$ metà stake = comportamento grave \\
+\hline
+$\gamma_{min}$ & 90\% & Profitto minimo garantito oracle (Sez.~\ref{sec:gas-analysis}) \\
+\hline
+\multicolumn{3}{|l|}{\textit{Formula Premio}} \\
+\hline
+$M_{base}$ & 0.20 & Margine base conservativo \\
+\hline
+$SR_{safe}$ / $SR_{critical}$ & 1.5 / 1.3 & Ispirato a Solvency~II (Sez.~\ref{sec:formula-premio}) \\
+\hline
+$\Delta M_{high}$ / $\Delta M_{med}$ & 0.10 / 0.05 & Incremento contenuto \\
+\hline
+$L\%$ & 0.25 & Upper bound conservativo (slippage 1--3\%) \\
+\hline
+$P_{min}$ & 1.5\% & Garantisce accumulo riserve con $P_{att}$ basso \\
+\hline
+$C_{oracle,24h}$ & (osservato) & Costo oracle reale 24h, internalizzato nella formula \\
+\hline
+$T_{captcha}$ & 120 s & Standard reCAPTCHA (2--5 min) \\
+\hline
+$N_{prove,min}$ & 5 & Campione minimo per pattern \\
+\hline
+$T_{collusione}$ & 30 gg & Coerente con $T_{reset,attivo}$ \\
+\hline
+$T_{sospetto}$ & 72 h & Finestra correlazione pagamento/favore \\
+\hline
+\caption{Parametri di governance del protocollo con valori di default e motivazioni.}
+\label{tab:governance-params}
+\end{longtable}
+
+%========================================================================
+\newpage
+\section{Risultati della Simulazione}
+\label{sec:simulazioni}
+%========================================================================
+
+Per validare il comportamento del protocollo in condizioni operative realistiche, è stata
+condotta una simulazione completa del sistema con attori reali --- trader, oracle, bot
+attaccante --- operanti su un pool AMM simulato per un periodo esteso. I risultati
+permettono di verificare empiricamente la sostenibilità economica del meccanismo
+assicurativo, l'efficacia del sistema di verifica dei claim e l'utilità della copertura
+per i trader assicurati.
+
+\subsection{Configurazione}
+
+La simulazione è stata eseguita con 7 oracle, 1 bot attaccante (sandwich) e 10 trader,
+di cui 5 dotati di copertura \texttt{HIGH} e 5 privi di copertura (\textit{naked}). Il
+pool AMM è stato inizializzato con \num{5000}~MEVI e \num{5000}~USDC; il pool assicurativo
+è partito da \num{50}~MEVI. Il numero complessivo di swap eseguiti è pari a \num{13212}.
+Lo scenario corrisponde al caso~2.1 (\textit{5 insured vs 5 naked --- attack rate 10\,\%}).
+
+La sessione ha avuto inizio alle ore 01:18 e si è conclusa alle ore 11:47, per una durata
+complessiva di circa dieci ore e ventinove minuti. Poiché ogni minuto reale corrispondeva
+a un giorno simulato, il sistema ha attraversato \num{629}~giorni di attività compressi nel
+tempo reale. Ogni trader eseguiva in media circa tre swap al giorno con valori di
+transazione compresi tra \num{50} e \num{150}~USDC, generando un flusso continuo e
+realistico di operazioni sul pool AMM per l'intera durata della simulazione.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={rectangle, draw, thick, rounded corners=3pt, minimum width=3cm, minimum height=0.85cm, align=center, font=\scriptsize},
+  arr/.style={->, thick, >=stealth}
+]
+\node[box, fill=yellow!30, minimum width=4cm, font=\small] (sc) at (0,0) {\textbf{Smart Contract}};
+\node[box, fill=cyan!15] (amm) at (-4.2,2.2) {AMM Pool\\5000 MEVI/USDC};
+\node[box, fill=green!20] (ins) at (4.2,2.2) {Pool Assicurativo\\50\,{\small →}\,80{,}62 MEVI};
+\node[box, fill=blue!15] (tins) at (-4.2,-2) {5 Trader HIGH\\vol.\ 398k MEVI};
+\node[box, fill=gray!25] (tnak) at (4.2,-2) {5 Trader Naked\\vol.\ 585k MEVI};
+\node[box, fill=orange!20] (orac) at (0,-2) {7 Oracle\\verifica claim};
+\node[box, fill=red!25] (bot) at (0,-4.2) {MEV Bot\\1129 attacchi sandwich};
+
+\draw[arr, cyan!60!black] (amm.south) -- node[left, font=\tiny]{dati prezzi} (sc.north west);
+\draw[arr, green!60!black] (sc.north east) -- node[right, font=\tiny]{riserva} (ins.south);
+\draw[<->, thick, >=stealth, blue!60!black] (tins.north east) -- node[above, font=\tiny, sloped]{premi/claim/payout} (sc.south west);
+\draw[arr, gray!60!black] (tnak.north west) -- node[above, font=\tiny, sloped]{swap} (sc.south east);
+\draw[arr] (orac.north) -- node[right, font=\tiny]{verdetti FraudScore} (sc.south);
+\draw[arr, red!70!black] (bot.north west) -- node[left, font=\tiny]{attacca} (tins.south);
+\draw[arr, red!70!black] (bot.north east) -- node[right, font=\tiny]{attacca} (tnak.south);
+\end{tikzpicture}
+\caption{Architettura della simulazione: 629~giorni, 13.212~swap totali, tasso di attacco effettivo 8,55\,\%. I trader assicurati (HIGH) interagiscono con lo smart contract con flusso bidirezionale (premi/claim/payout); i naked non ricevono rimborsi.}
+\end{figure}
+
+\subsection{Attività dell'Attaccante}
+
+Il bot ha attaccato \num{1129} swap su \num{13212} totali, pari all'\num{8,55}\,\%,
+sottraendo ai trader complessivamente \num{3979,11}~MEVI. La perdita media per swap
+attaccato è dunque
+\[
+  \frac{3979{,}11}{1129} \;=\; \num{3,52}\ \text{MEVI.}
+\]
+Considerando il volume totale degli swap pari a \num{983515,22}~MEVI, corrispondente ad
+uno swap medio di \num{74,44}~MEVI, la perdita media per attacco rappresenta il
+\num{4,73}\,\% del valore della singola transazione. Il dato è coerente con le stime
+empiriche della letteratura MEV, che collocano la perdita tipica da sandwich nell'ordine
+dell'1--5\% del valore della transazione.
+
+\subsection{Riepilogo per Trader}
+
+La Tabella~\ref{tab:trader} riporta, per ciascun trader, il volume swappato in MEVI,
+l'importo complessivamente sottratto dal bot, il premio versato e il rimborso ricevuto.
+
+\begin{table}[h]
+\centering
+\caption{Sommario per singolo trader. Tutti gli importi in MEVI.}
+\label{tab:trader}
+\small
+\begin{tabular}{lc S[table-format=9.4] S[table-format=4.4] S[table-format=6.4] S[table-format=6.4]}
+\toprule
+\textbf{Trader} & \textbf{Cop.}
+  & {\textbf{Volume}} & {\textbf{Attaccato}}
+  & {\textbf{Premio}} & {\textbf{Rimborso}} \\
+\midrule
+\texttt{0x14dc7996\dots} & ---  & 139251.4659 & 617.2902 & {---}      & {---}      \\
+\texttt{0x23618e81\dots} & ---  &  83922.6746 & 255.8103 & {---}      & {---}      \\
+\texttt{0x71be63f3\dots} & ---  & 139786.3399 & 627.5147 & {---}      & {---}      \\
+\texttt{0xa0ee7a14\dots} & ---  & 138079.1204 & 490.7035 & {---}      & {---}      \\
+\texttt{0xbcd4042d\dots} & ---  &  84268.6757 & 352.5365 & {---}      & {---}      \\
+\midrule
+\texttt{0x15d34aaf\dots} & HIGH &  71525.0061 & 251.2716 &  274.0831  &  239.9213  \\
+\texttt{0x3c44cddd\dots} & HIGH &  70772.8040 & 256.1291 &  271.1824  &  243.4103  \\
+\texttt{0x90f79bf6\dots} & HIGH &  71526.9068 & 321.8455 &  277.1605  &  300.2928  \\
+\texttt{0x976ea740\dots} & HIGH &  72127.3627 & 303.3079 &  275.9357  &  280.0263  \\
+\texttt{0x9965507d\dots} & HIGH & 112254.8627 & 502.7021 &  432.4858  &  436.5798  \\
+\midrule
+\multicolumn{2}{l}{\textbf{Totale non assicurati}}
+       & 585308.2765 & 2343.8552 & {---}      & {---}      \\
+\multicolumn{2}{l}{\textbf{Totale assicurati}}
+       & 398206.9423 & 1635.2562 & 1530.8475  & 1500.2305  \\
+\multicolumn{2}{l}{\textbf{Totale}}
+       & 983515.2188 & 3979.1114 & 1530.8475  & 1500.2305  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Attaccato e Rimborso: Perché Differiscono}
+
+Nei trader assicurati si osserva una sistematica differenza tra l'importo
+\emph{attaccato} --- cioè la perdita effettivamente subita durante lo swap --- e il
+\emph{rimborso} erogato dal protocollo. Nel complesso, su \num{1635,26}~MEVI dichiarati
+come perdita ne sono stati rimborsati \num{1500,23}; la differenza di \num{135,03}~MEVI
+(pari all'\num{8,26}\,\% dei claim) è stata rigettata dagli oracle.
+
+La causa risiede nel meccanismo di verifica: il protocollo accetta un rimborso soltanto se
+il pattern dell'attacco sandwich registrato on-chain soddisfa i criteri previsti dal
+contratto. Quando un trader invia un claim con un pattern non conforme --- ad esempio a
+causa di una stima errata degli indici di prezzo pre/post-attacco o di una struttura della
+transazione non riconosciuta come sandwich valido --- gli oracle rigettano la richiesta.
+Il trader subisce comunque la perdita, ma non riceve rimborso per quella transazione.
+Questo meccanismo è \textbf{intenzionale}: tutela la riserva del pool da rimborsi
+fraudolenti o basati su errori lato client, garantendo che solo le perdite verificabili
+vengano indennizzate.
+
+\subsection{Effetto Economico della Copertura}
+
+I trader assicurati hanno versato premi per \num{1530,85}~MEVI a fronte di un volume
+swappato di \num{398206,94}~MEVI: l'incidenza media del premio sul volume coperto è
+quindi pari allo \num{0,38}\,\%. I rimborsi complessivamente erogati ammontano a
+\num{1500,23}~MEVI, da cui un \emph{loss ratio} del
+\[
+  \frac{1500{,}2305}{1530{,}8475} \;=\; \num{98,00}\,\%.
+\]
+Il pool assicurativo, partito da \num{50}~MEVI, ha registrato una crescita fino a
+\num{80,62}~MEVI al termine della simulazione ($\Delta = +\num{30,62}$~MEVI). Un
+\emph{loss ratio} del \num{98}\,\% indica che i premi raccolti coprono abbondantemente i
+rimborsi erogati, lasciando un margine del \num{2}\,\% a favore del pool. Dal lato del
+protocollo, questo margine è destinato a coprire i costi operativi --- in particolare le
+ricompense degli oracle --- e ad accrescere la riserva, garantendo la sostenibilità del
+meccanismo nelle condizioni simulate.
+
+\subsection{Confronto sul Singolo Swap}
+
+Per illustrare l'utilità economica della copertura sul singolo trade, la
+Tabella~\ref{tab:confronto} pone a confronto due transazioni colpite dal bot ed eseguite
+a poco più di un minuto di distanza l'una dall'altra.
+
+\begin{table}[h]
+\centering
+\caption{Confronto tra uno swap assicurato e uno non assicurato.}
+\label{tab:confronto}
+\small
+\begin{tabular}{l S[table-format=3.2] S[table-format=3.4] S[table-format=1.4] S[table-format=1.4] S[table-format=1.4]}
+\toprule
+                 & {\textbf{Input (USDC)}} & {\textbf{Output (MEVI)}}
+                 & {\textbf{Premio}} & {\textbf{Perdita}} & {\textbf{Rimborso}} \\
+\midrule
+Assicurata,    \texttt{01:26:13} &  77.25 &  56.3657 & 0.2009 & 1.9764 & 1.9864 \\
+Non assicurata, \texttt{01:27:18}& 112.95 &  98.9335 & {---}  & 3.8105 & {---}  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Nel primo caso il trader assicurato ha pagato un premio pari allo \num{0,36}\,\% del
+valore in output della transazione per fronteggiare una perdita del \num{3,51}\,\% del
+valore stesso: il rimborso ricevuto (\num{1,9864}~MEVI) ha coperto pressoché
+integralmente l'importo sottratto. Nel secondo caso il trader, privo di copertura, ha
+subìto una perdita del \num{3,85}\,\% del valore della transazione --- avvenuta solo
+65~secondi dopo la prima --- senza alcuna possibilità di rimborso. Il premio che avrebbe
+pagato sottoscrivendo la copertura sarebbe stato dell'ordine dello \num{0,36}\,\% del
+valore, trattandosi di una transazione eseguita nello stesso intervallo temporale e di
+entità comparabile.
+
+\subsection{L'Assicurazione come Strumento di Pianificazione Finanziaria}
+
+L'utilità della copertura non si esaurisce nel rimborso diretto della perdita: il vero
+vantaggio competitivo risiede nella \textbf{prevedibilità del costo}. Senza assicurazione,
+un trader che opera su un DEX soggetto ad attacchi sandwich è esposto a perdite inattese
+e non pianificabili: su ogni swap esiste una probabilità che il bot sottragga una quota
+del valore della transazione, con un impatto variabile e imprevedibile da un'operazione
+all'altra. Con la copertura \texttt{HIGH}, invece, il costo di ogni swap è
+\emph{noto ex ante}: il trader paga un premio fisso --- nell'ordine dello \num{0,38}\,\%
+del volume --- indipendentemente da quante volte verrà attaccato, e può incorporarlo nei
+propri calcoli esattamente come farebbe con le commissioni di gas o le fee dell'AMM. La
+perdita da sandwich, se si verifica, rimane a carico del pool assicurativo; l'incertezza
+individuale viene redistribuita sull'intera comunità degli assicurati, secondo il principio
+attuariale di mutualizzazione del rischio.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[font=\scriptsize]
+  % y-scale: 0.45cm per MEVI
+  \draw[thick,->] (-0.2,0) -- (9.5,0);
+  \draw[thick,->] (0,-0.3) -- (0,5.6);
+  \node[above, font=\scriptsize] at (0,5.6) {MEVI};
+
+  % Y gridlines and labels
+  \foreach \mevi/\y in {0/0, 2/0.9, 4/1.8, 6/2.7, 8/3.6, 10/4.5} {
+    \draw[gray!35, thin] (0,\y) -- (9.2,\y);
+    \node[left, font=\tiny] at (-0.1,\y) {\mevi};
+  }
+
+  % Dashed line at 2.83 MEVI = 1.274 cm
+  \draw[blue!70!black, dashed, thick] (0,1.274) -- (9.2,1.274);
+  \node[right, blue!70!black, font=\tiny] at (9.25,1.274) {\,A\,=\,2{,}83};
+
+  % X-axis scenario labels
+  \foreach \x/\lbl in {1.4/{0 att.}, 3.4/{1 att.}, 5.4/{2 att.}, 7.4/{3 att.}} {
+    \node[below, font=\scriptsize] at (\x,-0.2) {\lbl};
+  }
+
+  % GROUP 1: 0 attacks — A only (B=0)
+  \fill[blue!35] (0.85,0) rectangle (1.35,1.274);
+  \draw (0.85,0) rectangle (1.35,1.274);
+  \node[above, font=\tiny] at (1.1,1.274) {2{,}83};
+  \node[gray, font=\tiny] at (1.7,0.15) {B=0};
+
+  % GROUP 2: 1 attack
+  \fill[blue!35] (2.85,0) rectangle (3.35,1.274);
+  \draw (2.85,0) rectangle (3.35,1.274);
+  \node[above, font=\tiny] at (3.1,1.274) {2{,}83};
+  \fill[red!35] (3.45,0) rectangle (3.95,1.584);
+  \draw (3.45,0) rectangle (3.95,1.584);
+  \node[above, font=\tiny] at (3.7,1.584) {3{,}52};
+
+  % GROUP 3: 2 attacks
+  \fill[blue!35] (4.85,0) rectangle (5.35,1.274);
+  \draw (4.85,0) rectangle (5.35,1.274);
+  \node[above, font=\tiny] at (5.1,1.274) {2{,}83};
+  \fill[red!35] (5.45,0) rectangle (5.95,3.168);
+  \draw (5.45,0) rectangle (5.95,3.168);
+  \node[above, font=\tiny] at (5.7,3.168) {7{,}04};
+
+  % GROUP 4: 3 attacks
+  \fill[blue!35] (6.85,0) rectangle (7.35,1.274);
+  \draw (6.85,0) rectangle (7.35,1.274);
+  \node[above, font=\tiny] at (7.1,1.274) {2{,}83};
+  \fill[red!35] (7.45,0) rectangle (7.95,4.752);
+  \draw (7.45,0) rectangle (7.95,4.752);
+  \node[above, font=\tiny] at (7.7,4.752) {10{,}56};
+
+  % Legend
+  \fill[blue!35] (0.4,4.9) rectangle (0.9,5.2); \draw (0.4,4.9) rectangle (0.9,5.2);
+  \node[right, font=\scriptsize] at (0.95,5.05) {Trader A (assicurato)};
+  \fill[red!35] (0.4,4.4) rectangle (0.9,4.7); \draw (0.4,4.4) rectangle (0.9,4.7);
+  \node[right, font=\scriptsize] at (0.95,4.55) {Trader B (naked)};
+\end{tikzpicture}
+\caption{Costo totale su 10 swap al variare degli attacchi subiti. Trader~A (blu) paga sempre \num{2,83}~MEVI di premi, indipendentemente dagli attacchi ricevuti. Trader~B (rosso) non paga premi ma è esposto a perdite non pianificabili: da 0 a \num{10,56}~MEVI. La linea tratteggiata segna il costo fisso dell'assicurazione.}
+\end{figure}
+
+\subsection{Due Trader a Confronto: Prevedibilità contro Incertezza}
+
+Per rendere concreta questa differenza, consideriamo due trader --- A e B --- che eseguono
+ciascuno dieci swap di importo analogo, pari al valore medio osservato nella simulazione:
+\num{74,44}~MEVI. Trader~A sottoscrive la copertura \texttt{HIGH} per ogni transazione;
+Trader~B opera senza alcuna protezione.
+
+Prima ancora di eseguire il primo swap, Trader~A conosce esattamente quanto pagherà in
+premi: lo \num{0,38}\,\% per ogni transazione, pari a circa \num{0,28}~MEVI per swap, per
+un totale di \num{2,83}~MEVI sull'intera sequenza di dieci operazioni. Questo numero non
+cambierà, indipendentemente da quante volte verrà attaccato: se il bot lo colpisce una,
+due o anche tre volte, il protocollo rimborserà integralmente la perdita e il costo netto
+rimarrà comunque \num{2,83}~MEVI. Trader~A può inserire questa cifra nel proprio piano
+finanziario come qualunque altra voce di spesa operativa.
+
+Trader~B non paga alcun premio. Con un tasso di attacco dell'\num{8,55}\,\%, ci si potrebbe
+aspettare in media circa un attacco su dieci swap --- ma questa è una probabilità aggregata
+sull'intera popolazione di transazioni, non una garanzia di distribuzione uniforme tra i
+singoli trader. Il bot seleziona le vittime osservando il mempool: il volume della
+transazione, il gas price, il momento esatto di invio. Nulla impedisce che Trader~B venga
+preso di mira zero volte (nessuna perdita) oppure due o tre volte di fila, con perdite
+cumulate del tutto non pianificate.
+
+\begin{table}[h]
+\centering
+\caption{Costo effettivo su 10 swap a seconda degli attacchi subiti
+         (perdita media per attacco: \num{3,52}~MEVI).}
+\label{tab:scenari}
+\small
+\begin{tabular}{cccc}
+\toprule
+\textbf{Attacchi subiti} & \textbf{Trader~A (assicurato)}
+  & \textbf{Trader~B (non assicurato)} & \textbf{Differenza} \\
+\midrule
+0 & \num{2,83}~MEVI & \num{0,00}~MEVI & B risparmia \num{2,83}~MEVI \\
+1 & \num{2,83}~MEVI & \num{3,52}~MEVI & B paga \num{0,69}~MEVI in più \\
+2 & \num{2,83}~MEVI & \num{7,04}~MEVI & B paga \num{4,21}~MEVI in più \\
+3 & \num{2,83}~MEVI & \num{10,56}~MEVI & B paga \num{7,73}~MEVI in più \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La tabella evidenzia il problema strutturale di operare senza copertura. Se Trader~B è
+fortunato e non viene mai attaccato risparmia i \num{2,83}~MEVI di premi, ma se viene
+colpito due volte consecutive --- uno scenario tutt'altro che raro quando la probabilità di
+attacco sfiora il 10\% --- la perdita sale a \num{7,04}~MEVI, oltre due volte e mezzo il
+costo fisso dell'assicurazione, senza preavviso e senza possibilità di rimborso. Il punto
+cruciale è che la probabilità di attacco è una misura statistica aggregata, non una
+garanzia di distribuzione uniforme tra i trader: due operatori con lo stesso profilo e
+lo stesso volume possono vivere esperienze radicalmente diverse nello stesso arco
+temporale. L'assicurazione non cambia la probabilità che un attacco avvenga, ma elimina
+l'incertezza su quanto quel rischio costerà al singolo trader, convertendo l'imponderabile
+in un costo fisso pianificabile.
+
+\subsection{Confronto con Nexus Mutual}
+
+Nexus Mutual è il principale protocollo di assicurazione decentralizzata su
+Ethereum.\footnote{\url{https://nexusmutual.io}} Lanciato nel 2019, ha raccolto
+storicamente oltre trentasette milioni di dollari in premi e ne ha distribuiti circa
+diciotto e mezzo in rimborsi, raggiungendo un \emph{loss ratio} aggregato del
+\num{50,26}\,\%.\footnote{Dati finanziari estratti dal dashboard ufficiale Nexus Mutual
+su Dune Analytics, consultato maggio~2026: premi totali \$37.070.492, rimborsi totali
+\$18.631.511.} Sebbene copra una tipologia di rischio diversa --- il fallimento o
+l'exploit di smart contract, piuttosto che l'estrazione MEV --- il confronto con MEV
+Insurance è significativo perché i due protocolli condividono la stessa struttura economica
+di fondo e affrontano i loro rispettivi mercati con soluzioni costruite sulle medesime
+premesse.
+
+Entrambi si basano su un pool di capitali collettivo alimentato dai premi degli assicurati,
+utilizzato per erogare i rimborsi quando un sinistro viene giudicato legittimo. In entrambi
+i casi i partecipanti al protocollo hanno un incentivo economico alla correttezza: Nexus
+Mutual remunera gli assessori che votano in linea col consenso e penalizza quelli che si
+discostano in modo anomalo, MEV Insurance distribuisce reward agli oracle che si allineano
+alla mediana del FraudScore e applica slashing a chi devia. Anche la gestione della
+solvibilità segue logiche parallele: quando le riserve scendono sotto una soglia critica,
+entrambi i protocolli reagiscono alzando il costo della copertura --- Nexus Mutual
+attraverso il suo parametro di capitale minimo (MCR)\footnote{Il MCR
+(\textit{Minimum Capital Requirement}) è calibrato a un livello di confidenza del
+99{,}5\,\%. Cfr.\ \url{https://docs.nexusmutual.io/protocol/capital-pool/mcr/}.} e il
+meccanismo di pricing dinamico RAMM,\footnote{Nexus Mutual ha adottato il meccanismo RAMM
+(\textit{Ratcheting AMM}) nel novembre~2023. Cfr.\
+\url{https://docs.nexusmutual.io/protocol/pricing/}.} MEV Insurance attraverso il
+margine adattivo che scala il premio in funzione del Solvency Ratio del pool.
+
+La differenza più evidente riguarda il modo in cui viene verificata la legittimità di un
+sinistro. Nexus Mutual affida questa decisione a un processo di governance umana: un
+comitato di assessori esamina il caso, e se il consenso non è sufficientemente ampio il
+voto viene esteso all'intera comunità dei possessori di NXM, con un processo che richiede
+tipicamente dai tre ai sette giorni.\footnote{La procedura prevede un minimo di 72~ore per
+il comitato di primo livello e fino a 7~giorni in caso di voto allargato. Cfr.\
+\url{https://docs.nexusmutual.io/protocol/claims-assessment/}.} Questo approccio è
+necessario quando il rischio coperto è di natura discrezionale: determinare se una perdita
+è causata da un exploit richiede giudizio umano. MEV Insurance opera in modo radicalmente
+diverso perché un attacco sandwich lascia una firma on-chain matematicamente inequivocabile,
+con frontrun, swap della vittima e backrun nello stesso blocco e nello stesso ordine di
+esecuzione. Non serve interpretazione; serve verifica. La rete di oracle esegue un processo
+commit-reveal in pochi minuti e produce un verdetto algoritmico basato sul FraudScore,
+riducendo i tempi di liquidazione da giorni a minuti e abbassando significativamente i
+costi operativi.
+
+Il divario nel \emph{loss ratio} --- \num{98}\,\% per MEV Insurance contro il \num{50}\,\%
+di Nexus Mutual --- riflette esattamente la diversa natura del rischio coperto. Nexus
+Mutual mantiene un margine di sicurezza vicino al \num{50}\,\% perché i rischi che
+affronta sono caratterizzati da alta imprevedibilità e potenziale impatto catastrofico: un
+singolo exploit può svuotare protocolli da centinaia di milioni di dollari, e le riserve
+devono essere abbondanti per garantire la solvibilità anche negli scenari più estremi.
+MEV Insurance copre invece un rischio statisticamente stabile e ad alta frequenza, per il
+quale la formula attuariale del premio riesce a calibrare con precisione l'esposizione del
+pool: il margine del \num{2}\,\% è sufficiente perché la distribuzione degli attacchi è
+prevedibile in aggregato, anche se imprevedibile per il singolo trader. In entrambi i
+casi il \emph{loss ratio} rimane inferiore al \num{100}\,\%: condizione necessaria affinché
+le riserve crescano nel tempo e il protocollo rimanga solvibile nel lungo periodo.
+
+Il punto più rilevante non riguarda però le differenze meccanistiche tra i due protocolli,
+bensì ciò che Nexus Mutual dimostra empiricamente: un'assicurazione decentralizzata può
+funzionare. In oltre cinque anni di operatività il protocollo ha distribuito milioni di
+dollari in rimborsi e ha mantenuto un \emph{loss ratio} stabilmente inferiore al
+\num{100}\,\%, crescendo in termini di capitale investito e di coperture
+vendute.\footnote{Al 2025 Nexus Mutual gestisce un pool di capitali di circa \$400~milioni.
+Fonte: Nexus Mutual, \textit{The Nexus Review --- Q4 2025 Wrap-Up},
+\url{https://forum.nexusmutual.io/t/the-nexus-review-q4-2025-wrap-up/1824},
+gennaio~2026.} Questa è la prova che gli utenti DeFi sono disposti a pagare premi per
+proteggersi, che un meccanismo distribuito di verifica dei sinistri può operare equamente
+su scala, e che un pool assicurativo decentralizzato può rimanere solvibile nel lungo
+periodo. MEV Insurance si costruisce esattamente su questi stessi presupposti e li applica
+a una classe di rischio più granulare.
+
+Se Nexus Mutual ha dimostrato che un \emph{loss ratio} del \num{50}\,\% è compatibile con
+un protocollo credibile e in crescita, a maggior ragione un \emph{loss ratio} del
+\num{98}\,\% --- più vicino alla neutralità attuariale e quindi strutturalmente più
+vantaggioso per l'assicurato --- è compatibile con la sostenibilità del pool, a condizione
+che la frequenza e la prevedibilità degli eventi coperti siano sufficientemente stabili.
+La simulazione dimostra che questa condizione è soddisfatta: il pool assicurativo è
+cresciuto da \num{50} a \num{80,62}~MEVI nonostante il \emph{loss ratio} quasi unitario,
+confermando che il margine del \num{2}\,%, pur ridotto, è calibrato correttamente sulla
+distribuzione statistica degli attacchi sandwich. Ciò che in Nexus Mutual sarebbe un
+segnale di riserve insufficienti, nel contesto di MEV Insurance è l'indicatore che i premi
+sono calibrati in modo quasi attuarialmente equo: il protocollo non estrae valore in
+eccesso dagli assicurati, ma si limita a coprire i propri costi operativi, esattamente
+come un'assicurazione matura e ben governata dovrebbe fare.
+
+\subsection{Considerazioni Conclusive}
+
+La simulazione, condotta con un tasso di attacco configurato al 10\,\% (tasso effettivo:
+\num{8,55}\,\%) e una perdita media per attacco del \num{4,73}\,\% del valore della
+singola transazione, conferma che la copertura \texttt{HIGH} risulta economicamente
+conveniente per entrambe le parti. Il trader è protetto dalla perdita inattesa pagando un
+premio pari allo \num{0,38}\,\% del volume, mentre il protocollo registra un
+\emph{loss ratio} del \num{98,00}\,\% --- un margine del \num{2}\,\% sufficiente a coprire
+i costi operativi e ad accrescere la riserva del pool da \num{50}~MEVI a
+\num{80,62}~MEVI nel corso della simulazione.
+
+L'esempio dei due trader mostra come la convenienza dell'assicurazione non risieda
+soltanto nel valore atteso dei rimborsi, ma nella certezza del costo: il trader assicurato
+sa già quanto spenderà, quello non assicurato non può prevederlo, e basta una sequenza di
+due attacchi ravvicinati per trovarsi a sostenere perdite più che doppie rispetto al costo
+fisso di una polizza. Il confronto con Nexus Mutual evidenzia come MEV Insurance si
+inserisca coerentemente nell'ecosistema delle assicurazioni DeFi consolidate,
+condividendone i principi fondamentali e declinandoli in forma parametrica e automatizzata,
+ideale per eventi con firma on-chain deterministica come gli attacchi sandwich.
+
+Il meccanismo di verifica degli oracle, che in questa simulazione ha respinto circa
+l'\num{8,26}\,\% dei claim, si conferma essenziale per proteggere il pool da rimborsi
+impropri. Il dato suggerisce che i client devono implementare con precisione la
+costruzione del pattern sandwich affinché la quasi totalità delle perdite legittime venga
+effettivamente indennizzata.
+
+%========================================================================
+\newpage
+\section{Analisi dei Costi Gas}
+\label{sec:gas-analysis}
+%========================================================================
+
+In Ethereum ogni transazione on-chain richiede il pagamento di una commissione
+(\emph{gas fee}) proporzionale alla complessità computazionale dell'operazione. Questa
+sezione analizza l'impatto dei costi gas sulla sostenibilità economica del protocollo e
+definisce il meccanismo di rimborso gas per gli oracle.
+
+\subsection{Chi Paga il Gas}
+
+In Ethereum gli smart contract non possono iniziare transazioni autonomamente: ogni azione
+on-chain deve essere avviata da un account esterno (EOA) che paga il gas. Il pool
+assicurativo non paga gas direttamente per le proprie operazioni, ma interviene come
+meccanismo di protezione per gli oracle quando i costi gas diventano significativi.
+
+L'\textbf{utente} paga il gas per \texttt{submitClaim()}, \texttt{buyPolicy()} e
+\texttt{requestPlatinum()}. Se il claim viene approvato, il pool rimborsa il costo gas
+della sottomissione come parte del payout, rendendo il claim a costo zero per l'utente
+legittimo. Gli \textbf{oracle} pagano inizialmente il gas di tasca propria per le
+transazioni \texttt{commit()} e \texttt{reveal()}, e ricevono dal pool il reward $R_{claim}$.
+In condizioni normali (gas price basso) $R_{claim}$ copre ampiamente il costo gas; se però
+il gas price sale al punto da erodere il margine sotto la soglia minima garantita
+$\gamma_{min}$, il pool interviene rimborsando la differenza. La \textbf{finalizzazione}
+--- calcolo della mediana, decisione e payout --- viene eseguita nella logica dell'ultima
+transazione \texttt{reveal()} o in una transazione \texttt{finalizeClaim()}: in entrambi
+i casi il gas è incluso nella transazione dell'ultimo chiamante.
+
+\subsection{Stima Gas per Ciclo Completo di un Claim}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Operazione} & \textbf{Gas stimato} & \textbf{Chi paga} \\
+\hline
+\texttt{submitClaim} (3 hash + storage) & $\sim$100.000 & Utente \\
+\hline
+$7 \times$ \texttt{commit} (hash + storage write) & $\sim$420.000 & Oracle ($\times$7) \\
+\hline
+$7 \times$ \texttt{reveal} (verifica + storage) & $\sim$700.000 & Oracle ($\times$7) \\
+\hline
+Calcolo mediana + decisione & $\sim$150.000 & Incluso in reveal \\
+\hline
+CAPTCHA (eventuale) & $\sim$50.000 & Oracle \\
+\hline
+Payout (trasferimento ETH) & $\sim$50.000 & Incluso in finalizzazione \\
+\hline
+\textbf{Totale ciclo} & $\sim$\textbf{1.470.000} & \\
+\hline
+\end{tabular}
+\caption{Stima del gas per un ciclo completo di valutazione claim con $N_{oracle} = 7$.
+Stime basate su operazioni Solidity tipiche (storage write $\sim$20.000 gas,
+\texttt{keccak256} $\sim$30 gas, SLOAD $\sim$2.100 gas).}
+\end{table}
+
+\subsection{Garanzia di Profitto Minimo per gli Oracle}
+\label{sec:gas-guarantee}
+
+Per garantire che gli oracle siano sempre adeguatamente incentivati indipendentemente
+dalle condizioni di gas price, il protocollo implementa un meccanismo di
+\textbf{rimborso gas con profitto minimo garantito}. Ogni oracle deve sempre ottenere un
+profitto netto pari ad almeno $\gamma_{min} = 90\%$ di $R_{claim}$ per ogni valutazione
+effettuata. Il meccanismo funziona come segue: l'oracle paga il gas di tasca propria e
+riceve $R_{claim}$ dal pool; il profitto netto è $R_{claim} - G_{oracle}$, dove
+$G_{oracle}$ è il costo gas effettivo. Se il profitto netto è $\geq \gamma_{min} \times
+R_{claim}$ non è necessario alcun intervento; se scende sotto tale soglia, il pool eroga
+un rimborso gas aggiuntivo pari a
+\[
+\text{Rimborso Gas} = G_{oracle} - (1 - \gamma_{min}) \times R_{claim}
+\]
+in modo che il profitto netto finale dell'oracle sia esattamente $\gamma_{min} \times R_{claim}$.
+
+\paragraph{Esempio numerico.}
+Con $R_{claim} = 0.002$ ETH, $\gamma_{min} = 90\%$ e $G_{oracle} = 160.000$ gas:
+a 0.2~Gwei (gas attuale) il costo gas è 0.000032 ETH e il profitto del 98.4\%, nessun
+rimborso necessario; a 5~Gwei il costo sale a 0.000800 ETH, il profitto scende al 60\%
+e il pool eroga 0.0006 ETH di rimborso; a 30~Gwei (congestione) il costo è 0.004800 ETH,
+profitto negativo, e il rimborso è di 0.0046 ETH.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Gas Price} & \textbf{Gas oracle} & \textbf{Rimborso/oracle} & \textbf{Rimborso pool/gg} & \textbf{Rimborso 30gg} \\
+\hline
+0.2 Gwei (attuale) & 0.000032 ETH & 0 (profitto 98\%) & 0 ETH & 0 ETH \\
+\hline
+1.0 Gwei & 0.000160 ETH & 0 (profitto 92\%) & 0 ETH & 0 ETH \\
+\hline
+1.25 Gwei (soglia) & 0.000200 ETH & 0 (profitto 90\%) & 0 ETH & 0 ETH \\
+\hline
+5.0 Gwei & 0.000800 ETH & 0.0006 ETH & 0.046 ETH & 1.39 ETH \\
+\hline
+30.0 Gwei & 0.004800 ETH & 0.0046 ETH & 0.354 ETH & 10.63 ETH \\
+\hline
+\end{tabular}
+\caption{Costo del meccanismo di rimborso gas per il pool a diversi gas price ($\sim$11
+claim/giorno, 7 oracle/claim). Il rimborso scatta solo sopra $\sim$1.25 Gwei.
+Con il gas attuale (0.2 Gwei) il costo per il pool è zero.}
+\label{tab:gas-oracle-impact}
+\end{table}
+
+\subsection{Soglia Minima di Valore Swap}
+
+Affinché il sistema sia economicamente sensato per l'utente, il gas pagato per
+\texttt{submitClaim} ($\sim$100.000 gas) non deve superare il premio pagato.
+Con il floor $P_{min} = 1.5\%$, il valore minimo dello swap perché l'operazione sia
+conveniente è:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{Gas Price} & \textbf{Costo gas claim (USD)} & \textbf{Swap minimo economico} \\
+\hline
+0.2 Gwei (L1 attuale) & \$0.04 & $\sim$\$3 \\
+\hline
+1.0 Gwei & \$0.21 & $\sim$\$14 \\
+\hline
+5.0 Gwei & \$1.04 & $\sim$\$69 \\
+\hline
+30.0 Gwei (congestione) & \$6.23 & $\sim$\$415 \\
+\hline
+\end{tabular}
+\caption{Soglia minima di valore swap in funzione del gas price. La soglia è calcolata
+come il valore di swap per cui il gas di \texttt{submitClaim} eguaglia il premio pagato
+($P_{min} \times V$). Con il gas attuale a 0.2 Gwei il sistema è economico per swap di
+qualsiasi importo pratico ($>$\$3). Nota: ETH = \$2.075 (marzo 2026).}
+\end{table}
+
+Con i livelli di gas attuali su Ethereum L1 (0.2--1 Gwei), il protocollo è economicamente
+accessibile per la quasi totalità degli utenti DeFi. Solo in scenari di congestione
+estrema (30 Gwei e oltre) la soglia minima di swap salirebbe a valori che escluderebbero
+i piccoli trader, ma questi scenari sono diventati sempre meno frequenti dopo le
+ottimizzazioni introdotte da Ethereum con EIP-4844.\footnote{\url{https://eips.ethereum.org/EIPS/eip-4844} --- EIP-4844 ``Proto-Danksharding'', introdotto con il Dencun upgrade (marzo 2024), riduce significativamente i costi gas per le transazioni su L1 e L2.}
+
+%========================================================================
+\newpage
+\section{Diagrammi di Sequenza}
+%========================================================================
+
+Questa sezione presenta i diagrammi di sequenza delle principali azioni del sistema,
+mostrando le interazioni tra gli attori e il flusso di operazioni.
+
+\subsection{Architettura del Sistema}
+
+Il sistema MEV Insurance coinvolge quattro attori principali con le seguenti interazioni:
+
+\vspace{0.5cm}
+
+\begin{tikzpicture}[
+  node distance=3cm,
+  actor/.style={rectangle, draw, thick, minimum width=3cm, minimum height=1.5cm, align=center, font=\small},
+  arrow/.style={->, thick, >=stealth}
+]
+
+\node[actor, fill=blue!20] (user) at (0,0) {\textbf{User}\\(Trader)};
+\node[actor, fill=green!20] (sc) at (7,0) {\textbf{Smart Contract}\\(MEV Insurance)};
+\node[actor, fill=orange!20] (oracle) at (7,-5) {\textbf{Oracle Network}\\(N nodi)};
+\node[actor, fill=red!20] (mev) at (0,-5) {\textbf{MEV Bot}\\(Attacker)};
+
+\draw[arrow, blue, very thick]
+([yshift=4pt]user.east) -- ([yshift=4pt]sc.west)
+node[midway, above, font=\tiny] {buy policy, submit claim};
+
+\draw[arrow, green, very thick]
+([yshift=-4pt]sc.west) -- ([yshift=-4pt]user.east)
+node[midway, below, font=\tiny] {payout, tier upgrade};
+
+\draw[arrow, red, very thick]
+([xshift=-6pt]sc.south) -- ([xshift=-6pt]oracle.north)
+node[pos=0.50, left,xshift=-4pt, font=\tiny] {RANDAO, events, P$_{att}$ request};
+
+\draw[arrow, green, very thick]
+([xshift=6pt]oracle.north) -- ([xshift=6pt]sc.south)
+node[pos=0.25, right, xshift=4pt, font=\tiny] {verdicts, scores, rewards};
+
+\draw[arrow, orange, thick]
+([xshift=-12pt]oracle.north) -- ([xshift=-12pt]sc.south)
+node[pos=0.80, left, font=\tiny] {deposit stake};
+
+\draw[arrow, purple, dashed]
+([xshift=12pt]oracle.north) -- ([xshift=12pt]sc.south)
+node[pos=0.40, right, font=\tiny] {slashing report};
+
+\draw[arrow, orange, dashed] (oracle.west) -- (mev.east) node[midway, below, font=\tiny] {monitor TX};
+
+\draw[arrow, red, dashed, very thick] (mev.north) -- (user.south)
+node[midway, left, font=\tiny] {sandwich attack};
+
+\end{tikzpicture}
+
+\vspace{0.5cm}
+
+Il flusso principale del protocollo si svolge in nove passi: l'oracle deposita lo stake nello
+smart contract per diventare attivo; l'utente acquista la policy e paga il premio allo smart
+contract; il MEV bot esegue il sandwich attack sull'utente; l'utente sottomette il claim allo
+smart contract; lo smart contract sorteggia $N$ oracle tramite RANDAO; gli oracle analizzano
+le transazioni off-chain, calcolano il FraudScore e monitorano il bot MEV; gli oracle
+sottomettono i verdetti allo smart contract tramite commit-reveal; lo smart contract calcola
+la mediana, richiede CAPTCHA se necessario e autorizza il payout; lo smart contract
+distribuisce i reward fissi agli oracle partecipanti.
+
+%------------------------------------------------------------------------
+\newpage
+\subsection{Sottomissione e Gestione Claim}
+%------------------------------------------------------------------------
+
+\begin{tikzpicture}[
+  >=stealth,
+  node distance=0.8cm,
+  every node/.style={font=\small}
+]
+
+\node[draw, fill=blue!20, minimum width=1.8cm, minimum height=0.7cm] (user) {User};
+\node[draw, fill=green!20, minimum width=1.8cm, minimum height=0.7cm, right=1.5cm of user] (sc) {Smart\\Contract};
+\node[draw, fill=orange!20, minimum width=1.8cm, minimum height=0.7cm, right=1.5cm of sc] (oracle) {Oracle\\(N)};
+\node[draw, fill=purple!20, minimum width=1.8cm, minimum height=0.7cm, right=1.5cm of oracle] (pool) {Pool};
+
+\draw[thick, gray] (user.south) -- ++(0,-17cm);
+\draw[thick, gray] (sc.south) -- ++(0,-17cm);
+\draw[thick, gray] (oracle.south) -- ++(0,-17cm);
+\draw[thick, gray] (pool.south) -- ++(0,-17cm);
+
+\draw[->, thick, blue] ($(user.south)+(0,-0.5)$) -- ($(sc.south)+(0,-0.5)$)
+  node[midway, above, font=\scriptsize] {1. submitClaim(tx1,tx2,tx3)};
+
+\node[draw, fill=yellow!20, text width=2.8cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-1.5)$) {2. Verify policy exists\\Check claim format};
+
+\node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-2.8)$) {3. RANDAO\\select N oracle};
+
+\draw[->, thick, blue] ($(sc.south)+(0,-3.8)$) -- ($(oracle.south)+(0,-3.8)$)
+  node[midway, above, font=\scriptsize] {4. notify(claimID)};
+
+\node[draw, fill=cyan!20, text width=3.2cm, align=center, font=\scriptsize]
+  at ($(oracle.south)+(0,-5.2)$) {5. OFF-CHAIN:\\Fetch 3 TX\\Verify sandwich pattern\\Calc real loss\\FraudScore};
+
+\draw[->, thick, green] ($(oracle.south)+(0,-6.8)$) -- ($(sc.south)+(0,-6.8)$)
+  node[midway, above, font=\scriptsize, align=center] {6. submitVerdict(score) \\ {[commit-reveal protocol]}};
+
+
+\node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-7.8)$) {7. Calc median\\of scores};
+
+\node[draw, fill=pink!20, text width=5.5cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0.4,-10)$) {
+    \textbf{8. Decisione per tier:}\\[3pt]
+    \textbf{Bronze / Silver:}\\
+    \quad score $< \theta_{reject}$ $\rightarrow$ CAPTCHA\\
+    \quad score $\geq \theta_{reject}$ $\rightarrow$ BLACKLIST\\[3pt]
+    \textbf{Gold / Platinum:}\\
+    \quad score $< \theta_{approve}$ $\rightarrow$ APPROVATO\\
+    \quad $\theta_{approve} \leq$ score $\leq \theta_{reject}$ $\rightarrow$ CAPTCHA\\
+    \quad score $> \theta_{reject}$ $\rightarrow$ BLACKLIST
+  };
+
+\draw[->, thick, red] ($(sc.south)+(0,-12.2)$) -- ($(oracle.south)+(0,-12.2)$)
+  node[midway, above, font=\scriptsize] {9. requestCAPTCHA()};
+
+\node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(oracle.south)+(0,-13.2)$) {10. Verify\\CAPTCHA token\\(off-chain)};
+
+\draw[->, thick, green] ($(oracle.south)+(0,-14.2)$) -- ($(sc.south)+(0,-14.2)$)
+  node[midway, above, font=\scriptsize] {11. verdictCAPTCHA};
+
+\node[draw, fill=pink!20, text width=3cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-15.2)$) {12. If CAPTCHA OK:\\Request payout};
+
+\draw[->, thick, purple] ($(sc.south)+(0,-16.2)$) -- ($(pool.south)+(0,-16.2)$)
+  node[midway, above, font=\scriptsize] {13. transfer};
+
+\draw[->, thick, green] ($(pool.south)+(0,-17)$) -- ($(user.south)+(0,-17)$)
+  node[midway, below, font=\scriptsize] {14. payout (50\%/70\%/100\%)};
+
+\end{tikzpicture}
+
+\vspace{1cm}
+%------------------------------------------------------------------------
+\newpage
+\subsection{Processo Slashing Completo}
+%------------------------------------------------------------------------
+
+\hspace{-2cm}
+\begin{tikzpicture}[
+  >=stealth,
+  node distance=0.8cm,
+  every node/.style={font=\small}
+]
+
+\node[draw, fill=red!20, minimum width=1.4cm, minimum height=0.7cm] (rep) {Reporter\\(Oracle)};
+\node[draw, fill=green!20, minimum width=1.4cm, minimum height=0.7cm, right=1.0cm of rep] (sc) {Smart\\Contract};
+\node[draw, fill=blue!20, minimum width=1.4cm, minimum height=0.7cm, right=1.0cm of sc] (jury) {Jury\\($N_{jury}$ Oracle)};
+\node[draw, fill=orange!20, minimum width=1.4cm, minimum height=0.7cm, right=1.0cm of jury] (acc) {Accused\\(Oracle)};
+\node[draw, fill=purple!20, minimum width=1.4cm, minimum height=0.7cm, right=1.0cm of acc] (pool) {Pool};
+
+\draw[thick, gray] (rep.south) -- ++(0,-17cm);
+\draw[thick, gray] (sc.south) -- ++(0,-17cm);
+\draw[thick, gray] (jury.south) -- ++(0,-17cm);
+\draw[thick, gray] (acc.south) -- ++(0,-17cm);
+\draw[thick, gray] (pool.south) -- ++(0,-17cm);
+
+\draw[->, thick, red] ($(rep.south)+(0,-0.5)$) -- ($(sc.south)+(0,-0.5)$)
+  node[midway, above, font=\scriptsize] {1. submitReport(proofs)};
+
+\draw[->, thick, purple] ($(rep.south)+(0,-1.2)$) -- ($(pool.south)+(0,-1.2)$)
+  node[midway, above, font=\scriptsize] {2. depositStake($C_{report}$)};
+
+\node[draw, fill=yellow!20, text width=2.2cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-2.2)$) {3. Validate:\\TX real, format OK};
+
+\node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-3.3)$) {4. RANDAO select\\$N_{jury}$ oracle\\(not in watchlist)};
+
+\draw[->, thick, blue] ($(sc.south)+(0,-4.3)$) -- ($(jury.south)+(0,-4.3)$)
+  node[midway, above, font=\scriptsize] {5. notify(reportID)};
+
+\node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(jury.south)+(0,-5.1)$) {6. Analyze\\(5 proof types)};
+
+
+\draw[->, thick, green] ($(jury.south)+(0,-6.5)$) -- ($(sc.south)+(0,-6.5)$)
+  node[midway, above, font=\scriptsize, align=center] {7. submitVote(0-100\%) \\ {[commit-reveal protocol]}};
+
+
+\node[draw, fill=yellow!20, text width=2.2cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-7.5)$) {8. Calc median\\of $N_{jury}$ votes};
+
+\node[draw, fill=pink!20, text width=5cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0.3,-9.2)$) {
+    \textbf{9. Decisione:}\\[2pt]
+    median = 0: confisca stake reporter\\
+    0 $<$ median $\leq$ $\theta_{expulsion}$: confisca + reintegro\\
+    median $>$ $\theta_{expulsion}$: confisca + blacklist\\
+    No reintegro: blacklist
+  };
+
+\draw[->, thick, red] ($(sc.south)+(0,-10.7)$) -- ($(rep.south)+(0,-10.7)$)
+  node[midway, above, font=\scriptsize] {10a. If med=0: lose stake};
+
+\draw[->, thick, orange] ($(sc.south)+(0,-11.4)$) -- ($(acc.south)+(0,-11.4)$)
+  node[midway, above, font=\scriptsize] {10b. If med$>$0: confiscate};
+
+\draw[->, thick, orange] ($(acc.south)+(0,-12.0)$) -- ($(pool.south)+(0,-12.0)$)
+  node[midway, above, font=\scriptsize] {stake to pool};
+
+\node[draw, fill=orange!20, text width=3.2cm, align=left, font=\scriptsize]
+  at ($(acc.south)+(0,-13.0)$) {
+    \textbf{11. Se med $\leq$ $\theta_{exp}$:}\\[2pt]
+    A) Paga + stake $\rightarrow$ OK\\
+    B) Non paga $\rightarrow$ blacklist
+  };
+
+\node[draw, fill=green!30, text width=4.5cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0.1,-14.5)$) {
+    \textbf{12. Se med $>$ 0, distribuz.:}\\[2pt]
+    $\pi_{pool}$ Pool, $\pi_{reporter}$ Reporter\\
+    (jury: reward fisso $R_{claim}$)
+  };
+
+\draw[->, thick, purple] ($(pool.south)+(0,-15.7)$) -- ($(sc.south)+(0,-15.7)$)
+  node[midway, above, font=\scriptsize] {13a. $\pi_{pool}$ stays};
+\draw[->, thick, red] ($(pool.south)+(0,-16.3)$) -- ($(rep.south)+(0,-16.3)$)
+  node[midway, above, font=\scriptsize] {13b. $\pi_{reporter}$};
+\draw[->, thick, blue] ($(pool.south)+(0,-16.9)$) -- ($(jury.south)+(0,-16.9)$)
+  node[midway, above, font=\scriptsize] {13c. $R_{claim}$ (fisso)};
+
+\end{tikzpicture}
+%------------------------------------------------------------------------
+\newpage
+\subsection{Valutazione Claim da parte Oracle}
+%------------------------------------------------------------------------
+
+\begin{tikzpicture}[
+  >=stealth,
+  node distance=0.8cm,
+  every node/.style={font=\small}
+]
+
+\node[draw, fill=blue!20, minimum width=2cm, minimum height=0.7cm] (user) {User};
+\node[draw, fill=green!20, minimum width=2cm, minimum height=0.7cm, right=1.3cm of user] (sc) {Smart\\Contract};
+\node[draw, fill=orange!20, minimum width=2cm, minimum height=0.7cm, right=1.3cm of sc] (oracle) {Oracle\\(N)};
+\node[draw, fill=purple!20, minimum width=2cm, minimum height=0.7cm, right=1.3cm of oracle] (chain) {Blockchain};
+
+\draw[thick, gray] (user.south) -- ++(0,-16.5cm);
+\draw[thick, gray] (sc.south) -- ++(0,-16.5cm);
+\draw[thick, gray] (oracle.south) -- ++(0,-16.5cm);
+\draw[thick, gray] (chain.south) -- ++(0,-16.5cm);
+
+\draw[->, thick, blue] ($(user.south)+(0,-0.5)$) -- ($(sc.south)+(0,-0.5)$)
+  node[midway, above, font=\scriptsize] {1. submitClaim(tx1,tx2,tx3)};
+
+\node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-1.3)$) {2. RANDAO\\select N oracle};
+
+\draw[->, thick, blue] ($(sc.south)+(0,-2.1)$) -- ($(oracle.south)+(0,-2.1)$)
+  node[midway, above, font=\scriptsize] {3. notify(claimID)};
+
+\draw[->, thick, red] ($(oracle.south)+(0,-2.8)$) -- ($(chain.south)+(0,-2.8)$)
+  node[midway, above, font=\scriptsize] {4. fetchTx(hash1,2,3)};
+
+\draw[<-, thick, red] ($(oracle.south)+(0,-3.4)$) -- ($(chain.south)+(0,-3.4)$)
+  node[midway, below, font=\scriptsize] {5. TX details};
+
+\node[draw, fill=cyan!20, text width=2.8cm, align=center, font=\scriptsize]
+  at ($(oracle.south)+(0,-4.3)$) {6. Verify\\sandwich pattern};
+
+\node[draw, fill=pink!20, text width=3.5cm, align=left, font=\scriptsize]
+  at ($(oracle.south)+(0,-5.4)$) {
+    \textbf{7. If pattern invalid:}\\
+    \quad submitVerdict(REJECT)\\
+    \quad $\rightarrow$ END (no payout)
+  };
+
+\node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(oracle.south)+(0,-6.5)$) {8. If valid:\\Calculate real loss};
+
+\node[draw, fill=yellow!20, text width=3.2cm, align=left, font=\tiny]
+  at ($(oracle.south)+(0,-7.7)$) {
+    9. Calc FraudScore:\\
+    \textbullet\ Tier: +0/+15/+30/+50\\
+    \textbullet\ ClaimRate: 0-30\\
+    \textbullet\ Network BFS: 0-50\\
+    Total: 0-130
+  };
+
+\draw[->, thick, green] ($(oracle.south)+(0,-8.8)$) -- ($(sc.south)+(0,-8.8)$)
+  node[midway, above, font=\scriptsize] {10. submitVerdict(score, sig)};
+
+\node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-9.7)$) {11. Verify\\signature};
+
+\node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-10.6)$) {12. Calculate\\median of scores};
+
+\node[draw, fill=cyan!20, text width=3cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-11.6)$) {13. Calc scostamento:\\$|$score - median$|$};
+
+\node[draw, fill=yellow!20, text width=2.8cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-12.6)$) {14. Update oracle\\cumulative score};
+
+\node[draw, fill=pink!20, text width=3.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-13.7)$) {15. Check watchlist:\\If $k_{watchlist}\times$ scost. $\geq \Delta_{watchlist}$\\add to watchlist};
+
+\node[draw, fill=green!20, text width=3cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0,-14.8)$) {
+    \textbf{16. Reward fisso:}\\
+    $R_{claim}$ per oracle\\
+    (indipendente da scost.)
+  };
+
+\draw[->, thick, green] ($(sc.south)+(0,-15.8)$) -- ($(oracle.south)+(0,-15.8)$)
+  node[midway, above, font=\scriptsize] {17. reward ($R_{claim}$)};
+
+\end{tikzpicture}
+%------------------------------------------------------------------------
+\newpage
+\subsection{Acquisto Policy}
+%------------------------------------------------------------------------
+
+\begin{tikzpicture}[
+  >=stealth,
+  node distance=0.8cm,
+  every node/.style={font=\small}
+]
+
+\node[draw, fill=blue!20, minimum width=2cm, minimum height=0.7cm] (user) {User};
+\node[draw, fill=green!20, minimum width=3cm, minimum height=0.7cm, right=2.5cm of user] (sc) {Smart Contract\\(+ Pool)};
+\node[draw, fill=purple!20, minimum width=2cm, minimum height=0.7cm, right=2.5cm of sc] (pool) {Pool\\(internal)};
+
+\draw[thick, gray] (user.south) -- ++(0,-17cm);
+\draw[thick, gray] (sc.south) -- ++(0,-17cm);
+\draw[thick, gray] (pool.south) -- ++(0,-17cm);
+
+\draw[->, thick, blue] ($(user.south)+(0,-0.5)$) -- ($(sc.south)+(0,-0.5)$)
+  node[midway, above, font=\scriptsize] {1. requestQuote(V, coverage)};
+
+\node[draw, fill=yellow!20, text width=4cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0,-1.8)$) {
+    \textbf{2. Verify user limits:}\\
+    Check tier (Bronze/Silver/Gold/Platinum)\\
+    Check V $\leq$ tier limit\\
+    Check daily swaps $\leq$ tier limit
+  };
+
+\node[draw, fill=pink!20, text width=3.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-3.3)$) {
+    \textbf{3. If limits exceeded:}\\
+    Notify user\\
+    $\rightarrow$ END
+  };
+
+\node[draw, fill=cyan!20, text width=4cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0,-4.7)$) {
+    \textbf{4. Consult storage metrics:}\\
+    P\_att (attack rate last 2d)\\
+    T\_int (fraud intercepted 24h, ETH)\\
+    E (FNR error rate)\\
+    V\_base (swaps 24h)
+  };
+
+\draw[->, thick, purple] ($(sc.south)+(0,-6.0)$) -- ($(pool.south)+(0,-6.0)$)
+  node[midway, above, font=\scriptsize] {5. getSolvencyRatio()};
+
+\draw[<-, thick, purple] ($(sc.south)+(0,-6.7)$) -- ($(pool.south)+(0,-6.7)$)
+  node[midway, below, font=\scriptsize] {SR};
+
+\node[draw, fill=cyan!30, text width=6.5cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0,-8.2)$) {
+    \textbf{6. Calculate $M_{adj}$:}\\[2pt]
+    \quad SR $\geq SR_{safe}$ $\rightarrow$ $M_{adj}$ = 0.00\\
+    \quad $SR_{critical} \leq$ SR $< SR_{safe}$ $\rightarrow$ $M_{adj} = \Delta M_{med}$\\
+    \quad SR $< SR_{critical}$ $\rightarrow$ $M_{adj} = \Delta M_{high}$
+  };
+
+\node[draw, fill=green!30, text width=4.8cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0,-10.0)$) {
+    \textbf{7. Set $F_{cov}$ (coverage factor):}\\[2pt]
+    \quad Low (50\% reimb) $\rightarrow$ $F_{cov}$ = 0.70\\
+    \quad Med (70\% reimb) $\rightarrow$ $F_{cov}$ = 0.90\\
+    \quad High (100\% reimb) $\rightarrow$ $F_{cov}$ = 1.00
+  };
+
+\node[draw, fill=orange!30, text width=12.8cm, align=center, font=\scriptsize, inner sep=5pt]
+  at ($(sc.south)+(0.4,-12.2)$) {
+    \textbf{8. Apply premium formula:}\\[4pt]
+    $P = \max \left( V \times \left[ (P_{att} \times L\%) + \frac{T_{int} \times E/(1-E) + C_{oracle,24h}}{V_{base}} \right] \times (1 + M_{base} + M_{adj}) \times F_{cov} , \;\; P_{min} \times V \right)$
+  };
+
+\draw[->, thick, green] ($(sc.south)+(0,-13.8)$) -- ($(user.south)+(0,-13.8)$)
+  node[midway, above, font=\scriptsize] {9. quote = Premium};
+
+\draw[->, thick, blue] ($(user.south)+(0,-14.6)$) -- ($(sc.south)+(0,-14.6)$)
+  node[midway, above, font=\scriptsize] {10. buyPolicy() + pay(P)};
+
+\node[draw, fill=yellow!20, text width=3.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-15.7)$) {
+    11. Create policy\\
+    Update user data\\
+    Assign tier (if new)
+  };
+
+\draw[->, thick, green] ($(sc.south)+(0,-16.8)$) -- ($(user.south)+(0,-16.8)$)
+  node[midway, above, font=\scriptsize] {12. policyID};
+
+\end{tikzpicture}
+
+\vspace{1cm}
+
+%------------------------------------------------------------------------
+\newpage
+\subsection{Upgrade Tier}
+%------------------------------------------------------------------------
+
+\begin{tikzpicture}[
+  >=stealth,
+  node distance=0.8cm,
+  every node/.style={font=\small}
+]
+
+\node[draw, fill=green!20, minimum width=2.5cm, minimum height=0.7cm] (sc) {Smart\\Contract};
+\node[draw, fill=blue!20, minimum width=2cm, minimum height=0.7cm, right=1.5cm of sc] (user) {User};
+\node[draw, fill=orange!20, minimum width=2cm, minimum height=0.7cm, right=1.5cm of user] (oracle) {Oracle};
+\node[draw, fill=purple!20, minimum width=2cm, minimum height=0.7cm, right=1.5cm of oracle] (pool) {Pool};
+
+\draw[thick, gray] (sc.south) -- ++(0,-17cm);
+\draw[thick, gray] (user.south) -- ++(0,-17cm);
+\draw[thick, gray] (oracle.south) -- ++(0,-17cm);
+\draw[thick, gray] (pool.south) -- ++(0,-17cm);
+
+\node[draw, fill=gray!30, text width=8cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(2.5,-0.8)$) {\textbf{AUTOMATICO: Bronze$\rightarrow$Silver / Silver$\rightarrow$Gold}};
+
+\node[draw, fill=cyan!20, text width=3cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-1.8)$) {1. Controllo periodico\\(24h o ogni swap)};
+
+\node[draw, fill=yellow!20, text width=3.5cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0,-3.2)$) {
+    2. Verifica statistiche:\\
+    swaps\_done\\
+    days\_active\\
+    avg\_FraudScore
+  };
+
+\node[draw, fill=pink!20, text width=5.5cm, align=left, font=\scriptsize]
+  at ($(sc.south)+(0.3,-4.8)$) {
+    3. Verifica soglie:\\
+    B$\to$S: $\geq N_{swap,BS}$ swap, $\geq D_{min,BS}$d, score$< F_{max,BS}$\\
+    S$\to$G: $\geq N_{swap,SG}$ swap, $\geq D_{min,SG}$d, score$< F_{max,SG}$
+  };
+
+\node[draw, fill=green!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-6.2)$) {4. Se OK:\\Upgrade automatico};
+
+\draw[->, thick, green] ($(sc.south)+(0,-7.2)$) -- ($(user.south)+(0,-7.2)$)
+  node[midway, above, font=\scriptsize] {5. notify(nuovo tier)};
+
+\node[draw, fill=gray!30, text width=8cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(2.5,-8.2)$) {\textbf{MANUALE: Platinum}};
+
+\draw[->, thick, blue] ($(user.south)+(0,-9.0)$) -- ($(sc.south)+(0,-9.0)$)
+  node[midway, above, font=\scriptsize] {6. requestPlatinum()};
+
+\node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-10.0)$) {7. Verifica:\\Non in blacklist};
+
+\draw[->, thick, purple] ($(sc.south)+(0,-10.9)$) -- ($(oracle.south)+(0,-10.9)$)
+  node[midway, above, font=\scriptsize] {8. verifyCAPTCHA(token)};
+
+\node[draw, fill=cyan!20, text width=2.8cm, align=center, font=\scriptsize]
+  at ($(oracle.south)+(0,-11.9)$) {9. OFF-CHAIN:\\Verifica con\\servizio CAPTCHA};
+
+\draw[<-, thick, purple] ($(sc.south)+(0,-12.9)$) -- ($(oracle.south)+(0,-12.9)$)
+  node[midway, below, font=\scriptsize] {10. valid/invalid};
+
+\draw[->, thick, blue] ($(user.south)+(0,-13.8)$) -- ($(pool.south)+(0,-13.8)$)
+  node[midway, above, font=\scriptsize] {11. depositStake($\alpha_{stake} \times$ max)};
+
+\node[draw, fill=cyan!20, text width=3cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-14.8)$) {12. Calcolo:\\maxLimit = stake/$\alpha_{stake}$};
+
+\node[draw, fill=green!20, text width=2.5cm, align=center, font=\scriptsize]
+  at ($(sc.south)+(0,-15.8)$) {13. Upgrade\\Platinum};
+
+\draw[->, thick, green] ($(sc.south)+(0,-16.8)$) -- ($(user.south)+(0,-16.8)$)
+  node[midway, above, font=\scriptsize] {14. confirmed + maxLimit};
+
+\end{tikzpicture}
+
+%========================================================================
+\newpage
+\section*{Riferimenti Bibliografici}
+\addcontentsline{toc}{section}{Riferimenti Bibliografici}
+%========================================================================
+
+\begin{thebibliography}{99}
+
+\bibitem{daian2020}
+P. Daian, S. Goldfeder, T. Kell, Y. Li, X. Zhao, I. Bentov, L. Breidenbach, A. Juels,
+``Flash Boys 2.0: Frontrunning in Decentralized Exchanges, Miner Extractable Value,
+and Consensus Instability'',
+\textit{Proc.\ IEEE Symposium on Security and Privacy (S\&P)}, 2020.
+\url{https://arxiv.org/abs/1904.05234}.
+
+\bibitem{qin2022}
+K. Qin, L. Zhou, B. Livshits, A. Gervais,
+``Quantifying Blockchain Extractable Value: How dark is the forest?'',
+\textit{Proc.\ IEEE Symposium on Security and Privacy}, 2022.
+\url{https://arxiv.org/abs/2101.05511}.
+
+\bibitem{torres2021}
+C.~F. Torres, R. Camino, R. State,
+``Frontrunner Jones and the Raiders of the Dark Forest:
+An Empirical Study of Frontrunning on the Ethereum Blockchain'',
+\textit{Proc.\ 30th USENIX Security Symposium}, 2021.
+\url{https://www.usenix.org/conference/usenixsecurity21/presentation/torres}.
+
+\bibitem{zhou2021}
+L. Zhou, K. Qin, C.~F. Torres, D.~V. Le, A. Gervais,
+``High-Frequency Trading on Decentralized On-Chain Exchanges'',
+\textit{Proc.\ IEEE Symposium on Security and Privacy}, 2021.
+\url{https://arxiv.org/abs/2009.14021}.
+
+\bibitem{angeris2021}
+G. Angeris, H.-T. Kao, R. Chiang, C. Noyes, T. Chitra,
+``An Analysis of Uniswap Markets'',
+\textit{Cryptoeconomic Systems}, 2021.
+\url{https://arxiv.org/abs/1911.03380}.
+
+\bibitem{uniswapv3}
+H. Adams, N. Zinsmeister, M. Salem, R. Keefer, D. Robinson,
+\textit{Uniswap v3 Core}, Whitepaper tecnico, 2021.
+\url{https://uniswap.org/whitepaper-v3.pdf}.
+
+\bibitem{werner2022}
+S.~M. Werner, D. Perez, L. Gudgeon, A. Klages-Mundt, D. Harz, W.~J. Knottenbelt,
+``SoK: Decentralized Finance (DeFi)'',
+\textit{Proc.\ ACM CCS Workshop on Decentralized Finance and Security}, 2022.
+\url{https://arxiv.org/abs/2101.08778}.
+
+\bibitem{lamport1982}
+L. Lamport, R. Shostak, M. Pease,
+``The Byzantine Generals Problem'',
+\textit{ACM Transactions on Programming Languages and Systems},
+vol.~4, n.~3, 1982, pp.~382--401.
+
+\bibitem{buterin2014}
+V. Buterin,
+``Ethereum White Paper: A Next Generation Smart Contract \& Decentralised Application
+Platform'', \textit{ethereum.org}, 2014.
+\url{https://ethereum.org/en/whitepaper/}.
+
+\bibitem{eigenphi}
+EigenPhi,
+\textit{Piattaforma di analisi MEV su Ethereum},
+\url{https://eigenphi.io}, consultata maggio~2026.
+
+\bibitem{flashbots}
+Flashbots,
+\textit{MEV-Boost: Merge ready Flashbots Architecture},
+\url{https://github.com/flashbots/mev-boost}, 2022.
+
+\bibitem{flashbotsprotect}
+Flashbots,
+\textit{Flashbots Protect RPC},
+\url{https://protect.flashbots.net}, consultato maggio~2026.
+
+\bibitem{nexusmutual}
+Nexus Mutual,
+\textit{Protocollo assicurativo decentralizzato},
+\url{https://nexusmutual.io}, consultato maggio~2026.
+
+\bibitem{nexusmutual-mcr}
+Nexus Mutual,
+\textit{Minimum Capital Requirement (MCR)},
+\url{https://docs.nexusmutual.io/protocol/capital-pool/mcr/}, consultato maggio~2026.
+
+\bibitem{nexusmutual-ramm}
+Nexus Mutual,
+\textit{RAMM: Ratcheting AMM Pricing Mechanism}, adottato novembre~2023.
+\url{https://docs.nexusmutual.io/protocol/pricing/}.
+
+\bibitem{nexusmutual-claims}
+Nexus Mutual,
+\textit{Claims Assessment Process},
+\url{https://docs.nexusmutual.io/protocol/claims-assessment/}, consultato maggio~2026.
+
+\bibitem{nexusmutual-q4}
+Nexus Mutual,
+\textit{The Nexus Review --- Q4 2025 Wrap-Up},
+\url{https://forum.nexusmutual.io/t/the-nexus-review-q4-2025-wrap-up/1824},
+gennaio~2026.
+
+\bibitem{aave}
+Aave Protocol,
+\textit{Risk Parameters Documentation},
+\url{https://docs.aave.com/risk/asset-risk/risk-parameters}, consultato maggio~2026.
+
+\bibitem{solvency2}
+Parlamento Europeo e Consiglio dell'Unione Europea,
+\textit{Direttiva 2009/138/CE (Solvency II)}, 25 novembre 2009, artt.~100--135.
+\url{https://eur-lex.europa.eu/legal-content/IT/TXT/?uri=CELEX:32009L0138}.
+
+\bibitem{recaptcha}
+Google,
+\textit{reCAPTCHA Developer Documentation},
+\url{https://developers.google.com/recaptcha}, consultato maggio~2026.
+
+\bibitem{ethereum-withdrawals}
+Ethereum Foundation,
+\textit{Staking Withdrawals},
+\url{https://ethereum.org/en/staking/withdrawals/}, consultato maggio~2026.
+
+\bibitem{ethereum-pos}
+Ethereum Foundation,
+\textit{Proof-of-Stake Consensus Mechanism},
+\url{https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/},
+consultato maggio~2026.
+
+\bibitem{ethereum-randao}
+Ethereum Foundation,
+\textit{Block Proposal and RANDAO},
+\url{https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/block-proposal/},
+consultato maggio~2026.
+
+\bibitem{eip4844}
+Ethereum Improvement Proposals,
+\textit{EIP-4844: Shard Blob Transactions (Proto-Danksharding)},
+\url{https://eips.ethereum.org/EIPS/eip-4844}, marzo~2024.
+
+\end{thebibliography}
+
+\end{document}

@@ -104,6 +104,7 @@ def generate_economic_report() -> Path:
     ts_now = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = LOGS_DIR / f"economic_report_{ts_now}.txt"
 
+    #serve per matchare le righe del simulation log scritte dal trader e del pool
     swap_re = re.compile(
         r'\[(\d{2}:\d{2}:\d{2})\]\[  SWAP\] TRADER (0x[0-9a-fA-F]+) \| ([\d.]+) USDC'
         r' \| prot: (\S+)'
@@ -118,6 +119,7 @@ def generate_economic_report() -> Path:
     r'\s*\|\s*mevi=([\d.]+)\s*MEVI'
     r'\s*\|\s*eth=([\d.]+)\s*ETH'
 )
+    
 
     log_file = LOGS_DIR / "simulation.log"
     raw_lines: list[str] = []
@@ -128,6 +130,7 @@ def generate_economic_report() -> Path:
     traders: dict = {}
     pool_snaps: list = []
 
+    #per ogni eiga che matcho creo un entry nel dizionario dei traders per tracciarmi tutto
     for line in raw_lines:
         m = swap_re.search(line)
         if m:
@@ -144,6 +147,8 @@ def generate_economic_report() -> Path:
             perd   = float(perdita)  if perdita  else 0.0
             rim_str = rimborso.strip() if rimborso else ""
             rim_val = 0.0
+
+            #può esserci rimborso, non esserci oppure non essere assicurato
             if rim_str and rim_str not in ("NON ASSICURATO", "NO"):
                 try:
                     rim_val = float(rim_str.split()[0])
@@ -153,6 +158,7 @@ def generate_economic_report() -> Path:
             d["tot_attacked"] += perd
             d["tot_premio"]   += pr
             d["tot_rimborso"] += rim_val
+            #aggiungo una tupla per ogni tx
             d["txs"].append((ts_l, float(usdc), mevi_r, pr, attacco == "SI", perd, rim_str))
             continue
         m = pool_re.search(line)
@@ -167,6 +173,7 @@ def generate_economic_report() -> Path:
         pass
 
     W = 70
+    #lista righe report
     ls: list[str] = []
     def sep(c="="): ls.append(c * W)
     def h(t=""): ls.append(t)
@@ -177,6 +184,7 @@ def generate_economic_report() -> Path:
     sep()
     h()
 
+    #stampa tabella con evoluzione del pool
     if pool_snaps:
         sep("─")
         h("  EVOLUZIONE POOL (ogni 2 min)")
@@ -187,6 +195,8 @@ def generate_economic_report() -> Path:
         h()
 
     sep("─")
+
+    #una riga per ogni trader con i totali aggregati
     h("  SOMMARIO TRADER")
     sep("─")
     if traders:
@@ -200,6 +210,8 @@ def generate_economic_report() -> Path:
     h()
 
     sep("─")
+
+    #utte le tx per ogni trader
     h("  DETTAGLIO TX PER TRADER")
     sep("─")
     for addr, d in sorted(traders.items()):
@@ -217,6 +229,7 @@ def generate_economic_report() -> Path:
             h(row)
     h()
 
+    #statistich degli oracle
     if oracle_stats:
         sep("─")
         h("  ORACLE STATS")
