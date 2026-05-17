@@ -1,52 +1,16 @@
-LaTeX Error: Invalid UTF-8 byte sequence (�\lst@FillFixed@\lst@EC�).
-‪./app.tex, 791‬
-See the LaTeX manual or LaTeX Companion for explanation.
-Type  H <return>  for immediate help.
- ...                                              
-                                                  
-l.791 // Fase 1 — 
-                    commit: l'oracle invia solo l'hash, il valore resta nasc...
-The document does not appear to be in UTF-8 encoding.
-Try adding \UseRawInputEncoding as the first line of the file
-or specify an encoding such as \usepackage [latin1]{inputenc}
-in the document preamble.
-Alternatively, save the file in UTF-8 using your editor or another tool
-LaTeX Error: Invalid UTF-8 byte "94.
-‪./app.tex, 791‬
-See the LaTeX manual or LaTeX Companion for explanation.
-Type  H <return>  for immediate help.
- ...                                              
-                                                  
-l.791 // Fase 1 — 
-                    commit: l'oracle invia solo l'hash, il valore resta nasc...
-The document does not appear to be in UTF-8 encoding.
-Try adding \UseRawInputEncoding as the first line of the file
-or specify an encoding such as \usepackage [latin1]{inputenc}
-in the document preamble.
-Alternatively, save the file in UTF-8 using your editor or another tool
-LaTeX Error: Invalid UTF-8 byte sequence (�\lst@FillFixed@\lst@EC�).
-‪./app.tex, 794‬
-See the LaTeX manual or LaTeX Companion for explanation.
-Type  H <return>  for immediate help.
- ...                                              
-                                                  
-l.794 // Fase 2 — 
-                    reveal: il contratto verifica che hash(score||valid||sal...
-The document does not appear to be in UTF-8 encoding.
-Try adding \UseRawInputEncoding as the first line of the file
-or specify an encoding such as \usepackage [latin1]{inputenc}
-in the document preamble.
-Alternatively, save the file in UTF-8 using your editor or another tool
-LaTeX Error: Invalid UTF-8 byte "94.
-‪./app.tex, 794‬
-See the LaTeX manual or LaTeX Companion for explanation.
-Type  H <return>  for immediate help.
- ...                                              
-                                                  
-l.794 // Fase 2 — 
-                    reveal: il contratto verifica che hash(score||valid||sal...
-The document does not appear to be in UTF-8 encoding.
-Try adding \UseRawInputEncoding as the first line of the file
-or specify an encoding such as \usepackage [latin1]{inputenc}
-in the document preamble.
-Alternatively, save the file in UTF-8 using your editor or another tool
+I dati empirici più recenti (EigenPhi, maggio 2026)17 mostrano uno scena-
+rio maturo e professionalmente strutturato: circa 515 bot distinti operano su
+Ethereum, di cui circa 100 attivi mensilmente, con un volume di 60.000–90.000
+attacchi al mese su DEX con volumi mensili superiori a 100 miliardi di dollari.
+Il profitto medio per attacco è relativamente basso (circa $3–$5), ma la scala
+del fenomeno lo rende economicamente rilevante sia per i singoli utenti colpiti
+sia per l’ecosistema nel suo complesso. La perdita tipica per l’utente vittima si
+attesta nell’ordine dell’1–5% del valore della transazione, con punte superiori in
+pool a bassa liquidità o con alta tolleranza di slippage.
+La firma on-chain di un attacco sandwich è deterministica e verificabile:
+le tre transazioni (frontrun, victim, backrun) compaiono nello stesso blocco o
+in blocchi consecutivi, sullo stesso pool DEX e per la stessa coppia di token,
+in un ordine causalmente vincolato. Questa proprietà distingue il sandwich
+attack da altre tipologie di perdita DeFi — come gli exploit di smart contract
+o le perdite da liquidazione — che richiedono interpretazione umana, e rende
+possibile l’automazione completa della verifica.

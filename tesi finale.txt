@@ -92,9 +92,8 @@
 \label{sec:stato-arte}
 %========================================================================
 
-Il protocollo MEV Insurance si inserisce all'intersezione di tre ambiti di ricerca
-attivi: la caratterizzazione economica degli attacchi di frontrunning sugli exchange
-decentralizzati, lo studio dei meccanismi di estrazione di valore dalle blockchain
+Il protocollo MEV Insurance si inserisce all'intersezione di due ambiti di ricerca
+attivi: lo studio dei meccanismi di estrazione di valore dalle blockchain
 (\emph{Maximal Extractable Value}), e lo sviluppo di protocolli assicurativi
 decentralizzati. Questa sezione riassume le principali contribuzioni della letteratura
 in ciascun ambito e identifica la lacuna a cui MEV Insurance intende rispondere.
@@ -110,15 +109,26 @@ autonomi che operano senza intermediari tradizionali.\footnote{V. Buterin,
 ``Ethereum White Paper: A Next Generation Smart Contract \& Decentralised Application
 Platform'', \textit{ethereum.org}, 2014. \url{https://ethereum.org/en/whitepaper/}.}
 Al 2025 il valore totale bloccato (\emph{Total Value Locked}, TVL) nei protocolli DeFi
-supera i cento miliardi di dollari, con una concentrazione significativa su exchange
-decentralizzati (DEX), protocolli di prestito e derivati on-chain.
+supera gli ottanta miliardi di dollari, con una concentrazione significativa su exchange
+decentralizzati (DEX), protocolli di prestito e derivati on-chain.\footnote{DeFi Llama,
+\textit{DeFi Total Value Locked},
+\url{https://defillama.com}, consultato maggio~2026.}
 
 Ethereum utilizza un modello di esecuzione basato su una macchina virtuale (EVM) che
-elabora le transazioni in blocchi. Ogni blocco è proposto da un validatore selezionato
-attraverso il meccanismo \emph{Proof-of-Stake} e contiene un numero limitato di
+elabora le transazioni in blocchi.\footnote{G. Wood, \textit{Ethereum: A Secure
+Decentralised Generalised Transaction Ledger (Yellow Paper)}, Ethereum Foundation, 2014.
+\url{https://ethereum.github.io/yellowpaper/paper.pdf}.} Ogni blocco è proposto da un
+validatore selezionato attraverso il meccanismo \emph{Proof-of-Stake}\footnote{Ethereum
+Foundation, \textit{Proof-of-Stake Consensus Mechanism},
+\url{https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/},
+consultato maggio~2026.} e contiene un numero limitato di
 transazioni ordinate secondo criteri economici. L'ordinamento delle transazioni
 all'interno di un blocco è la radice del problema MEV: chiunque abbia potere su tale
-ordinamento ha la possibilità di estrarre valore a spese degli altri partecipanti.
+ordinamento ha la possibilità di estrarre valore a spese degli altri partecipanti.\footnote{P.
+Daian, S. Goldfeder, T. Kell, Y. Li, X. Zhao, I. Bentov, L. Breidenbach, A. Juels,
+``Flash Boys 2.0: Frontrunning in Decentralized Exchanges, Miner Extractable Value,
+and Consensus Instability'', \textit{Proc.\ IEEE S\&P}, 2020.
+\url{https://arxiv.org/abs/1904.05234}.}
 
 %------------------------------------------------------------------------
 \subsection{Automated Market Maker e Meccanismo di Prezzo}
@@ -127,20 +137,27 @@ ordinamento ha la possibilità di estrarre valore a spese degli altri partecipan
 Gli exchange decentralizzati moderni si basano sul paradigma degli
 \textbf{Automated Market Maker} (AMM), che sostituisce il tradizionale order book
 con una funzione matematica che determina il prezzo in funzione delle riserve di
-liquidità disponibili. Il modello dominante, introdotto da Uniswap v2 e perfezionato
+liquidità disponibili. Il modello dominante, introdotto da Uniswap v2\footnote{H. Adams, N. Zinsmeister,
+D. Robinson, \textit{Uniswap v2 Core}, Whitepaper tecnico, 2020.
+\url{https://uniswap.org/whitepaper.pdf}.} e perfezionato
 in Uniswap v3,\footnote{H. Adams, N. Zinsmeister, M. Salem, R. Keefer, D. Robinson,
 \textit{Uniswap v3 Core}, Whitepaper tecnico, 2021.
 \url{https://uniswap.org/whitepaper-v3.pdf}.} è la \textbf{funzione di prodotto costante}:
+\vspace{-8pt}
 \[
 x \cdot y = k
 \]
+\vspace{-8pt}
 dove $x$ e $y$ sono le riserve dei due token nel pool e $k$ è una costante. Un
 acquisto di quantità $\Delta x$ di token X riduce la riserva di X e aumenta quella
 di Y secondo la relazione $y' = k / (x + \Delta x)$; il prezzo effettivamente
 pagato è quindi superiore al prezzo istantaneo di mercato, con uno scarto che cresce
 al crescere di $\Delta x$ rispetto alla liquidità disponibile. Questo scarto è lo
 \textbf{slippage}, ed è il valore che un attaccante può sottrarre intercettando e
-manipolando l'ordinamento delle transazioni.
+manipolando l'ordinamento delle transazioni.\footnote{P. Daian, S. Goldfeder, T. Kell,
+Y. Li, X. Zhao, I. Bentov, L. Breidenbach, A. Juels, ``Flash Boys 2.0: Frontrunning
+in Decentralized Exchanges, Miner Extractable Value, and Consensus Instability'',
+\textit{Proc.\ IEEE S\&P}, 2020. \url{https://arxiv.org/abs/1904.05234}.}
 
 Angeris et al.\ hanno analizzato formalmente le proprietà dei mercati AMM,\footnote{G.
 Angeris, H.-T. Kao, R. Chiang, C. Noyes, T. Chitra, ``An Analysis of Uniswap Markets'',
@@ -150,7 +167,10 @@ esterno e che la liquidità concentrata (introdotta in Uniswap v3) migliora l'ef
 del capital deployment. Tuttavia, questa stessa efficienza può amplificare il potenziale
 di estrazione attraverso transazioni strategicamente ordinate, poiché lo slippage su
 pool a liquidità concentrata può superare quello dei pool uniformi nei pressi dei tick
-boundary.
+boundary.\footnote{Il meccanismo dei tick boundary è descritto in Adams et al.\ (2021,
+cit.). Per l'amplificazione del MEV su pool a liquidità concentrata cfr.\ K. Qin,
+L. Zhou, B. Livshits, A. Gervais, ``Quantifying Blockchain Extractable Value: How dark
+is the forest?'', \textit{Proc.\ IEEE S\&P}, 2022. \url{https://arxiv.org/abs/2101.05511}.}
 
 %------------------------------------------------------------------------
 \subsection{Maximal Extractable Value (MEV)}
@@ -158,12 +178,16 @@ boundary.
 
 Il termine \emph{Miner Extractable Value} --- poi generalizzato in
 \emph{Maximal Extractable Value} per includere i validatori PoS --- è stato
-formalizzato da Daian et al.\ nel lavoro seminale \emph{Flash Boys 2.0}
-(IEEE S\&P 2020):\footnote{P. Daian, S. Goldfeder, T. Kell, Y. Li, X. Zhao,
+introdotto da Daian et al.\ nel lavoro seminale \emph{Flash Boys 2.0}
+(IEEE S\&P 2020).\footnote{P. Daian, S. Goldfeder, T. Kell, Y. Li, X. Zhao,
 I. Bentov, L. Breidenbach, A. Juels, ``Flash Boys 2.0: Frontrunning in
 Decentralized Exchanges, Miner Extractable Value, and Consensus Instability'',
 \textit{Proc.\ IEEE Symposium on Security and Privacy (S\&P)}, 2020.
-\url{https://arxiv.org/abs/1904.05234}.}
+\url{https://arxiv.org/abs/1904.05234}.} La seguente formalizzazione matematica,
+consolidatasi nella letteratura successiva,\footnote{K. Babel, P. Daian, M. Kelkar,
+A. Juels, ``Clockwork Finance: Automated Analysis of Economic Security in Smart
+Contracts'', \textit{Proc.\ IEEE S\&P}, 2023.
+\url{https://arxiv.org/abs/2109.04347}.} ne cattura l'essenza:
 \[
 \text{MEV} = \max_{\sigma} \left( \sum_{tx \in B_\sigma} \text{profit}(tx) \right) - \text{reward standard}(B)
 \]
@@ -177,8 +201,8 @@ Qin et al.\ hanno quantificato il MEV estratto su Ethereum tra gennaio 2020 e ap
 Qin, L. Zhou, B. Livshits, A. Gervais, ``Quantifying Blockchain Extractable Value:
 How dark is the forest?'', \textit{Proc.\ IEEE S\&P}, 2022.
 \url{https://arxiv.org/abs/2101.05511}.} una quota significativa di questo valore
-è riconducibile a operazioni di frontrunning e sandwich. La tassonomia del MEV include
-diverse categorie:
+è riconducibile a operazioni di frontrunning e sandwich. La tassonomia classica del
+MEV, analizzata in questi studi, include diverse categorie:
 
 \begin{itemize}
     \item \textbf{Frontrunning}: inserimento di una transazione identica a quella
@@ -197,23 +221,14 @@ diverse categorie:
 Studi successivi hanno esteso l'analisi al periodo post-Merge, confermando che la
 transizione a Proof-of-Stake non ha ridotto il fenomeno: il MEV è migrato dai miner
 ai validatori e ai \emph{block builder} specializzati dell'infrastruttura
-MEV-Boost.\footnote{Flashbots, \textit{MEV-Boost: Merge ready Flashbots Architecture},
-\url{https://github.com/flashbots/mev-boost}, 2022.} Il MEV è oggi sistematicamente
+MEV-Boost.\footnote{B. Öz, D. Dhaliwal, T. Thiery, P. Jovanovic, ``Who Wins Ethereum
+Block Building Auctions and Why?'', \textit{Proc.\ ACM CCS}, 2024.
+\url{https://arxiv.org/abs/2310.04921}.} Il MEV è oggi sistematicamente
 rilevante e tendenzialmente crescente con la liquidità degli exchange.
 
 %------------------------------------------------------------------------
-\subsection{Attacchi Sandwich: Letteratura e Caratterizzazione Empirica}
+\subsection{Attacchi Sandwich}
 %------------------------------------------------------------------------
-
-Gli attacchi sandwich sono stati caratterizzati formalmente per la prima volta in due
-studi pubblicati in parallelo nel 2021. Torres et al.\ (\emph{USENIX Security
-2021})\footnote{C.~F. Torres, R. Camino, R. State, ``Frontrunner Jones and the
-Raiders of the Dark Forest: An Empirical Study of Frontrunning on the Ethereum
-Blockchain'', \textit{Proc.\ 30th USENIX Security Symposium}, 2021.
-\url{https://www.usenix.org/conference/usenixsecurity21/presentation/torres}.}
-hanno analizzato oltre 11 milioni di blocchi Ethereum (agosto 2015 -- aprile 2021),
-identificando più di 200.000 attacchi di tipo sandwich per un profitto complessivo
-stimato in circa 18,4 milioni di dollari.
 
 Zhou et al.\ (\emph{IEEE S\&P 2021})\footnote{L. Zhou, K. Qin, C.~F. Torres,
 D.~V. Le, A. Gervais, ``High-Frequency Trading on Decentralized On-Chain Exchanges'',
@@ -222,76 +237,17 @@ D.~V. Le, A. Gervais, ``High-Frequency Trading on Decentralized On-Chain Exchang
 l'analisi degli attacchi ad alta frequenza sugli AMM, dimostrando che il sandwich
 attack è ottimale per un attaccante razionale in presenza di transaction ordering
 manipulation. La condizione di profittabilità per un sandwich attack è:
+\vspace{-14pt}
 \[
 \Delta_{\text{bot}} \cdot (p_1 - p_0) > G_{\text{frontrun}} + G_{\text{backrun}}
+\vspace{-14pt}
 \]
+
 dove $\Delta_{\text{bot}}$ è la quantità acquistata dal bot nel frontrun,
 $(p_1 - p_0)$ è l'aumento di prezzo indotto dalla transazione della vittima e
 $G_{\text{frontrun}}, G_{\text{backrun}}$ sono i costi gas del bundle. Gli autori
 dimostrano che il profitto del bot cresce monotonicamente con la dimensione della
 transazione della vittima e con il parametro di slippage tolerance impostato.
-
-I dati empirici più recenti (EigenPhi, ottobre 2025)\footnote{\url{https://eigenphi.io}
---- piattaforma di analisi MEV su Ethereum, consultata maggio~2026.} mostrano uno
-scenario maturo e professionalmente strutturato: circa 515 bot distinti operano su
-Ethereum, di cui circa 100 attivi mensilmente, con un volume di 60.000--90.000
-attacchi al mese su DEX con volumi mensili superiori a 100 miliardi di dollari.
-Il profitto medio per attacco è relativamente basso (circa \$3--\$5), ma la scala
-del fenomeno lo rende economicamente rilevante sia per i singoli utenti colpiti sia
-per l'ecosistema nel suo complesso. La perdita tipica per l'utente vittima si attesta
-nell'ordine dell'1--5\% del valore della transazione, con punte superiori in pool a
-bassa liquidità o con alta tolleranza di slippage.
-
-La \textbf{firma on-chain} di un attacco sandwich è deterministica e verificabile:
-le tre transazioni (frontrun, victim, backrun) compaiono nello stesso blocco o in
-blocchi consecutivi, sullo stesso pool DEX e per la stessa coppia di token, in un
-ordine causalmente vincolato. Questa proprietà distingue il sandwich attack da altre
-tipologie di perdita DeFi --- come gli exploit di smart contract o le perdite da
-liquidazione --- che richiedono interpretazione umana, e rende possibile
-l'automazione completa della verifica.
-
-%------------------------------------------------------------------------
-\subsection{Soluzioni Preventive Esistenti e Limitazioni}
-%------------------------------------------------------------------------
-
-La letteratura e l'industria hanno sviluppato diverse contromisure per ridurre
-l'esposizione agli attacchi sandwich, classificabili in tre categorie principali.
-
-\paragraph{Mempool privati e dark pool.}
-Servizi come Flashbots Protect\footnote{\url{https://protect.flashbots.net} ---
-servizio di protezione MEV di Flashbots, che instrada le transazioni direttamente
-ai builder senza passare per il mempool pubblico.} e MEV Blocker\footnote{\url{https://mevblocker.io}
---- RPC endpoint con protezione MEV offerto da CoW Protocol.} consentono agli utenti
-di inviare le proprie transazioni attraverso canali privati che bypassano il mempool
-pubblico, rendendo di fatto invisibili ai bot le transazioni in attesa. Questi servizi
-hanno ridotto significativamente l'esposizione agli attacchi frontrunning per gli
-utenti che li adottano, ma soffrono di due limitazioni strutturali: richiedono una
-configurazione tecnica non banale (cambio di RPC endpoint), e non offrono alcun
-meccanismo di compensazione per le perdite già subite o in caso di malfunzionamento.
-
-\paragraph{Protezione tramite slippage tolerance.}
-L'impostazione di una tolleranza di slippage bassa (es.\ 0.1--0.5\%) riduce il
-profitto potenziale del bot, rendendo molti attacchi economicamente non convenienti.
-Tuttavia, su pool a bassa liquidità o per token volatili, una tolleranza troppo bassa
-causa sistematicamente il fallimento delle transazioni (\emph{transaction revert}),
-con conseguente perdita del gas pagato senza completare lo swap. L'utente si trova
-costretto a trovare un equilibrio subottimale tra protezione e usabilità.
-
-\paragraph{Protocolli di batching.}
-Protocolli come CoW Swap\footnote{\url{https://cow.fi} --- exchange decentralizzato
-basato su batch auction, che aggrega gli ordini e li liquida tramite un meccanismo
-di asta che elimina strutturalmente il frontrunning.} aggregano gli ordini in batch
-liquidati tramite meccanismi d'asta, eliminando strutturalmente l'opportunità di
-frontrunning. L'approccio è però compatibile solo con scambi che tollerano una finestra
-di latenza per la raccolta e la liquidazione del batch (tipicamente alcuni minuti) e
-richiede che gli utenti rinuncino all'esecuzione immediata offerta dai DEX tradizionali.
-
-\paragraph{Lacuna residua.}
-Nessuna delle soluzioni preventive esistenti offre \textbf{compensazione economica}
-per gli attacchi già avvenuti. Un utente che non adotta (o non può adottare) misure
-preventive subisce una perdita netta senza possibilità di recupero. MEV Insurance
-interviene esattamente in questo spazio: non prevenendo l'attacco, ma compensando la
-vittima \emph{ex post}, in modo automatico e algoritmico.
 
 %------------------------------------------------------------------------
 \subsection{Assicurazione Decentralizzata: Stato dell'Arte}
@@ -306,12 +262,15 @@ dei sinistri affidata a un meccanismo di governance distribuita: un comitato di
 assessori (staker di NXM) vota sulla legittimità di ogni claim, con possibilità di
 escalation all'intera comunità. In oltre cinque anni di operatività il protocollo ha
 distribuito circa 18,6 milioni di dollari in rimborsi su oltre 37 milioni di dollari
-di premi raccolti, dimostrando che il modello assicurativo decentralizzato può
+di premi raccolti,\footnote{Dati finanziari estratti dal dashboard ufficiale Nexus Mutual
+su Dune Analytics, consultato maggio~2026: premi totali \$37.070.492, rimborsi totali
+\$18.631.511. \url{https://dune.com/nexus_mutual/nexus-mutual}.} dimostrando che il modello assicurativo decentralizzato può
 funzionare a scala.
 
 Altri protocolli hanno proposto modelli alternativi: InsurAce\footnote{\url{https://insurace.io}}
 e Unslashed Finance\footnote{\url{https://unslashed.finance}} offrono coperture per
-exploit di smart contract e de-pegging di stablecoin; Bridge Mutual ha introdotto un
+exploit di smart contract e de-pegging di stablecoin; Bridge Mutual\footnote{\url{https://bridgemutual.io} --- protocollo di assicurazione
+decentralizzata su Ethereum con modello di staking bidirezionale, attivo dal 2021.} ha introdotto un
 modello di staking bidirezionale in cui i provider di liquidità assumono il rischio dei
 claim. Nessuno di questi protocolli offre tuttavia copertura specifica per gli attacchi
 MEV: la natura della perdita è diversa (non un exploit del contratto assicurato, ma
@@ -360,18 +319,7 @@ caratterizzato da ruoli, responsabilità e incentivi economici specifici, proget
 che il comportamento razionale di ciascuno contribuisca al funzionamento equilibrato
 dell'intero protocollo.
 
-\paragraph{Nota sui parametri del protocollo.}
-Il protocollo definisce un insieme di parametri numerici che governano soglie operative,
-incentivi e limiti. Ciascun parametro è stato scelto sulla base di una o più delle seguenti
-fonti di giustificazione: la validazione empirica tramite la simulazione operativa del
-protocollo (vedi Sezione~\ref{sec:simulazioni}), dati on-chain e studi della letteratura
-di settore (EigenPhi,\footnote{\url{https://eigenphi.io} --- piattaforma di analisi MEV su
-Ethereum, consultata maggio~2026.} Flashbots,\footnote{\url{https://flashbots.net} ---
-organizzazione di ricerca sulla MEV e sul block building trasparente.} Chi et al.\ 2024,
-Li et al.\ 2024), oppure considerazioni di design sottoposte alla governance del protocollo.
-I parametri classificati come \emph{governance} sono implementati come costanti aggiornabili
-nello smart contract, consentendo al protocollo di adattarsi all'evoluzione del mercato
-senza richiedere un re-deploy del contratto.
+
 
 %------------------------------------------------------------------------
 \subsection{Concetti Preliminari}
@@ -386,7 +334,8 @@ funzionare correttamente anche quando una frazione dei partecipanti si comporta 
 malevolo o difettoso. Il concetto prende nome dal Problema dei Generali Bizantini,
 formalizzato da Lamport, Shostak e Pease nel 1982,\footnote{L. Lamport, R. Shostak,
 M. Pease, ``The Byzantine Generals Problem'', \textit{ACM Transactions on Programming
-Languages and Systems}, vol.~4, n.~3, 1982, pp.~382--401.} che dimostra come un gruppo di
+Languages and Systems}, vol.~4, n.~3, 1982, pp.~382--401.
+\url{https://lamport.azurewebsites.net/pubs/byz.pdf}.} che dimostra come un gruppo di
 attori possa raggiungere il consenso nonostante la presenza di traditori al proprio interno.
 
 Il risultato fondamentale stabilisce che per tollerare $f$ nodi \emph{bizantini} servono
@@ -413,10 +362,14 @@ la selezione dei verdetti claim (mediana di $N$ oracle) e la soglia di rigetto p
 \label{sec:gametheory}
 
 La \textbf{teoria dei giochi} studia le decisioni strategiche tra agenti razionali i cui
-risultati dipendono dalle scelte di tutti i partecipanti. Nel design di protocolli
+risultati dipendono dalle scelte di tutti i partecipanti.\footnote{M.~J. Osborne,
+A. Rubinstein, \textit{A Course in Game Theory}, MIT Press, 1994.
+\url{https://arielrubinstein.tau.ac.il/books/GT.pdf}.} Nel design di protocolli
 decentralizzati questo strumento è fondamentale perché consente di costruire le regole del
 sistema in modo che il comportamento onesto sia automaticamente conveniente per ciascun
-attore: si parla in questo caso di \textbf{equilibrio di Nash}, ovvero di una situazione
+attore: si parla in questo caso di \textbf{equilibrio di Nash},\footnote{J.~F. Nash,
+``Non-Cooperative Games'', \textit{Annals of Mathematics}, vol.~54, n.~2, 1951,
+pp.~286--295. \url{https://www.jstor.org/stable/1969529}.} ovvero di una situazione
 in cui nessun partecipante ha incentivo a deviare unilateralmente dalla strategia corretta.
 
 Il protocollo MEV Insurance applica questo principio a ogni livello del sistema. Gli oracle
@@ -2656,6 +2609,11 @@ G. Angeris, H.-T. Kao, R. Chiang, C. Noyes, T. Chitra,
 \textit{Cryptoeconomic Systems}, 2021.
 \url{https://arxiv.org/abs/1911.03380}.
 
+\bibitem{uniswapv2}
+H. Adams, N. Zinsmeister, D. Robinson,
+\textit{Uniswap v2 Core}, Whitepaper tecnico, 2020.
+\url{https://uniswap.org/whitepaper.pdf}.
+
 \bibitem{uniswapv3}
 H. Adams, N. Zinsmeister, M. Salem, R. Keefer, D. Robinson,
 \textit{Uniswap v3 Core}, Whitepaper tecnico, 2021.
@@ -2672,6 +2630,19 @@ L. Lamport, R. Shostak, M. Pease,
 ``The Byzantine Generals Problem'',
 \textit{ACM Transactions on Programming Languages and Systems},
 vol.~4, n.~3, 1982, pp.~382--401.
+\url{https://lamport.azurewebsites.net/pubs/byz.pdf}.
+
+\bibitem{nash1951}
+J.~F. Nash,
+``Non-Cooperative Games'',
+\textit{Annals of Mathematics}, vol.~54, n.~2, 1951, pp.~286--295.
+\url{https://www.jstor.org/stable/1969529}.
+
+\bibitem{osborne1994}
+M.~J. Osborne, A. Rubinstein,
+\textit{A Course in Game Theory},
+MIT Press, 1994.
+\url{https://arielrubinstein.tau.ac.il/books/GT.pdf}.
 
 \bibitem{buterin2014}
 V. Buterin,
@@ -2679,15 +2650,38 @@ V. Buterin,
 Platform'', \textit{ethereum.org}, 2014.
 \url{https://ethereum.org/en/whitepaper/}.
 
+\bibitem{wood2014}
+G. Wood,
+\textit{Ethereum: A Secure Decentralised Generalised Transaction Ledger (Yellow Paper)},
+Ethereum Foundation, 2014.
+\url{https://ethereum.github.io/yellowpaper/paper.pdf}.
+
 \bibitem{eigenphi}
 EigenPhi,
 \textit{Piattaforma di analisi MEV su Ethereum},
 \url{https://eigenphi.io}, consultata maggio~2026.
 
+\bibitem{babel2023}
+K. Babel, P. Daian, M. Kelkar, A. Juels,
+``Clockwork Finance: Automated Analysis of Economic Security in Smart Contracts'',
+\textit{Proc.\ IEEE Symposium on Security and Privacy (S\&P)}, 2023.
+\url{https://arxiv.org/abs/2109.04347}.
+
+\bibitem{oz2024}
+B. Öz, D. Dhaliwal, T. Thiery, P. Jovanovic,
+``Who Wins Ethereum Block Building Auctions and Why?'',
+\textit{Proc.\ ACM Conference on Computer and Communications Security (CCS)}, 2024.
+\url{https://arxiv.org/abs/2310.04921}.
+
 \bibitem{flashbots}
 Flashbots,
 \textit{MEV-Boost: Merge ready Flashbots Architecture},
 \url{https://github.com/flashbots/mev-boost}, 2022.
+
+\bibitem{mevexplore}
+Flashbots,
+\textit{MEV-Explore: a view into the dark forest},
+\url{https://explore.flashbots.net}, 2022.
 
 \bibitem{flashbotsprotect}
 Flashbots,
@@ -2756,6 +2750,21 @@ consultato maggio~2026.
 Ethereum Improvement Proposals,
 \textit{EIP-4844: Shard Blob Transactions (Proto-Danksharding)},
 \url{https://eips.ethereum.org/EIPS/eip-4844}, marzo~2024.
+
+\bibitem{defillama}
+DeFi Llama,
+\textit{DeFi Total Value Locked},
+\url{https://defillama.com}, consultato maggio~2026.
+
+\bibitem{nexusmutual-dune}
+Nexus Mutual,
+\textit{Financial Dashboard on Dune Analytics},
+\url{https://dune.com/nexus_mutual/nexus-mutual}, consultato maggio~2026.
+
+\bibitem{bridgemutual}
+Bridge Mutual,
+\textit{Protocollo di assicurazione decentralizzata con staking bidirezionale},
+\url{https://bridgemutual.io}, consultato maggio~2026.
 
 \end{thebibliography}
 
