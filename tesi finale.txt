@@ -169,7 +169,7 @@ di estrazione attraverso transazioni strategicamente ordinate, poiché lo slippa
 pool a liquidità concentrata può superare quello dei pool uniformi nei pressi dei tick
 boundary.\footnote{Il meccanismo dei tick boundary è descritto in Adams et al.\ (2021,
 cit.). Per l'amplificazione del MEV su pool a liquidità concentrata cfr.\ K. Qin,
-L. Zhou, B. Livshits, A. Gervais, ``Quantifying Blockchain Extractable Value: How dark
+L. Zhou, A. Gervais, ``Quantifying Blockchain Extractable Value: How dark
 is the forest?'', \textit{Proc.\ IEEE S\&P}, 2022. \url{https://arxiv.org/abs/2101.05511}.}
 
 %------------------------------------------------------------------------
@@ -198,7 +198,7 @@ ordinamento neutro delle transazioni.
 
 Qin et al.\ hanno quantificato il MEV estratto su Ethereum tra gennaio 2020 e aprile
 2021, identificando oltre 540 milioni di dollari di MEV rilevabile on-chain:\footnote{K.
-Qin, L. Zhou, B. Livshits, A. Gervais, ``Quantifying Blockchain Extractable Value:
+Qin, L. Zhou, A. Gervais, ``Quantifying Blockchain Extractable Value:
 How dark is the forest?'', \textit{Proc.\ IEEE S\&P}, 2022.
 \url{https://arxiv.org/abs/2101.05511}.} una quota significativa di questo valore
 è riconducibile a operazioni di frontrunning e sandwich. La tassonomia classica del
@@ -221,9 +221,9 @@ MEV, analizzata in questi studi, include diverse categorie:
 Studi successivi hanno esteso l'analisi al periodo post-Merge, confermando che la
 transizione a Proof-of-Stake non ha ridotto il fenomeno: il MEV è migrato dai miner
 ai validatori e ai \emph{block builder} specializzati dell'infrastruttura
-MEV-Boost.\footnote{B. Öz, D. Dhaliwal, T. Thiery, P. Jovanovic, ``Who Wins Ethereum
-Block Building Auctions and Why?'', \textit{Proc.\ ACM CCS}, 2024.
-\url{https://arxiv.org/abs/2310.04921}.} Il MEV è oggi sistematicamente
+MEV-Boost.\footnote{B. Öz, D. Sui, T. Thiery, F. Matthes, ``Who Wins Ethereum
+Block Building Auctions and Why?'', \textit{Proc.\ Advances in Financial Technologies (AFT)}, 2024.
+\url{https://arxiv.org/abs/2407.13931}.} Il MEV è oggi sistematicamente
 rilevante e tendenzialmente crescente con la liquidità degli exchange.
 
 %------------------------------------------------------------------------
@@ -279,8 +279,8 @@ specializzate che i sistemi di governance generica non sono attrezzati a esprime
 
 Werner et al.\ hanno condotto una revisione sistematica dell'ecosistema DeFi,\footnote{S.
 M. Werner, D. Perez, L. Gudgeon, A. Klages-Mundt, D. Harz, W. J. Knottenbelt,
-``SoK: Decentralized Finance (DeFi)'', \textit{Proc.\ ACM CCS Workshop on Decentralized
-Finance and Security}, 2022. \url{https://arxiv.org/abs/2101.08778}.} evidenziando come
+``SoK: Decentralized Finance (DeFi)'', \textit{arXiv preprint arXiv:2101.08778},
+2022. \url{https://arxiv.org/abs/2101.08778}.} evidenziando come
 la mancanza di meccanismi di protezione per le perdite da MEV costituisca una lacuna
 rilevante nell'ecosistema, data la loro alta frequenza e il loro impatto diretto sugli
 utenti retail.
@@ -502,8 +502,6 @@ ufficiale Google reCAPTCHA.}
 
 \begin{figure}[H]
 \centering
-\begin{figure}[H]
-\centering
 \begin{tikzpicture}[
   tier/.style={rectangle, draw, thick, rounded corners=4pt, minimum width=2cm, minimum height=0.9cm, align=center, font=\small},
   arr/.style={->, thick, >=stealth}
@@ -532,8 +530,8 @@ ufficiale Google reCAPTCHA.}
 \draw[arr, red!70!black] (go.south) |- (bl.east);
 \draw[arr, red!70!black] (pl.south) .. controls (10.5,-1.5) and (8.5,-2.8) .. (bl.east);
 
-% 4. Scritta rossa F_reject riposizionata più in basso rispetto al nodo Blacklist
-\node[right, font=\scriptsize, red!80!black] at ([yshift=-0.4cm]bl.east) {FS $> F_{reject}$};
+% 4. Scritta rossa theta_reject riposizionata più in basso rispetto al nodo Blacklist
+\node[right, font=\scriptsize, red!80!black] at ([yshift=-0.4cm]bl.east) {FS $> \theta_{reject}$};
 
 % 5. Freccia grigia DIRETTA da Blacklist a Bronze con scritta grigia subito sotto
 % (Disegnata da Bronze a Blacklist con il flag [<-] per mantenere il testo dritto da sinistra a destra)
@@ -541,7 +539,6 @@ ufficiale Google reCAPTCHA.}
   node[midway, below, sloped, font=\scriptsize, gray!60] {saldo debito $\to$ riattivazione};
 
 \end{tikzpicture}
-\end{figure}
 \caption{Progressione del tier. Gli upgrade automatici (frecce verdi) richiedono soglie di swap completati, giorni di attività e FraudScore medio; per Platinum richiede stake e verifica CAPTCHA. Qualsiasi tier con FS $> \theta_{reject}$ viene spostato in Blacklist; il debito va saldato per la riattivazione.}
 \end{figure}
 
@@ -947,7 +944,7 @@ Il Claim Rate misura il rapporto tra claim sottomessi e swap totali assicurati:
 \text{Claim Rate} = \frac{\text{Total Claims}}{\text{Total Swap Assicurati}}
 \]
 Le soglie sono calibrate rispetto al tasso empirico di attacchi sandwich. Secondo
-Wang et al.\footnote{Y. Wang, Y. Chen, H. Wu, L. Zhou, S. Lent, R. Wattenhofer,
+Chi et al.\footnote{T. Chi, N. He, X. Hu, H. Wang,
 ``Remeasuring the Arbitrage and Sandwich Attacks of Maximal Extractable Value in
 Ethereum'', \textit{arXiv preprint arXiv:2405.17944}, 2024.
 \url{https://arxiv.org/abs/2405.17944}.}, il Claim Rate di mercato si attesta
@@ -966,7 +963,7 @@ $> 20\%$ & +25 & $\geq 4\times P_{att}$: molto sospetto \\
 \hline
 $> 10\%$ & +20 & $\geq 2\times P_{att}$: sospetto \\
 \hline
-$\leq 10\%$ & +15 & Entro $2\times P_{att}$: elevato ma plausibile \\
+$6\%\text{--}10\%$ & +15 & Entro $2\times P_{att}$: elevato ma plausibile \\
 \hline
 $< 6\%$ & +0 & Coerente con $P_{att}$ di mercato \\
 \hline
@@ -1211,7 +1208,7 @@ I parametri della formula sono i seguenti:
 \textbf{$V$} è il valore dello swap da assicurare in ETH.
 
 \textbf{$P_{att}$} è la percentuale di attacchi sandwich sul mercato, calcolata su dati
-on-chain pubblici. Secondo Wang et al.\ (arXiv:2405.17944, 2024), $P_{att}$ si
+on-chain pubblici. Secondo Chi et al.\ (arXiv:2405.17944, 2024), $P_{att}$ si
 attesta nell'ordine del 2--5\%, con picchi fino al 10\% in periodi di alta attività MEV.
 $P_{att}$ viene aggiornato ogni 24 ore tramite un meccanismo decentralizzato descritto
 nel paragrafo successivo.
@@ -1430,10 +1427,7 @@ al block builder.
 \caption{Meccanismo di un sandwich attack: il bot ``avvolge'' la transazione della vittima con frontrun e backrun nello stesso blocco, estraendo valore attraverso la variazione di prezzo indotta.}
 \end{figure}
 
-Secondo dati EigenPhi (ottobre 2025), circa 515 bot distinti operano su Ethereum, di cui
-circa 100 sono attivi mensilmente. Il profitto medio per attacco è estremamente basso
-(circa \$3), ma i volumi elevati --- 60.000--90.000 attacchi al mese --- rendono
-l'attività complessivamente remunerativa. La firma on-chain di un sandwich attack è
+La firma on-chain di un sandwich attack è
 matematicamente inequivocabile: frontrun, victim e backrun compaiono nello stesso blocco
 o in blocchi consecutivi, per lo stesso pool DEX e coppia di token, nell'ordine di
 esecuzione corretto. Questa determinismo rende la verifica automatizzata possibile e
@@ -2687,7 +2681,7 @@ and Consensus Instability'',
 \url{https://arxiv.org/abs/1904.05234}.
 
 \bibitem{qin2022}
-K. Qin, L. Zhou, B. Livshits, A. Gervais,
+K. Qin, L. Zhou, A. Gervais,
 ``Quantifying Blockchain Extractable Value: How dark is the forest?'',
 \textit{Proc.\ IEEE Symposium on Security and Privacy}, 2022.
 \url{https://arxiv.org/abs/2101.05511}.
@@ -2706,7 +2700,7 @@ L. Zhou, K. Qin, C.~F. Torres, D.~V. Le, A. Gervais,
 \url{https://arxiv.org/abs/2009.14021}.
 
 \bibitem{wang2024}
-Y. Wang, Y. Chen, H. Wu, L. Zhou, S. Lent, R. Wattenhofer,
+T. Chi, N. He, X. Hu, H. Wang,
 ``Remeasuring the Arbitrage and Sandwich Attacks of Maximal Extractable Value
 in Ethereum'',
 \textit{arXiv preprint arXiv:2405.17944}, 2024.
@@ -2731,7 +2725,7 @@ H. Adams, N. Zinsmeister, M. Salem, R. Keefer, D. Robinson,
 \bibitem{werner2022}
 S.~M. Werner, D. Perez, L. Gudgeon, A. Klages-Mundt, D. Harz, W.~J. Knottenbelt,
 ``SoK: Decentralized Finance (DeFi)'',
-\textit{Proc.\ ACM CCS Workshop on Decentralized Finance and Security}, 2022.
+\textit{arXiv preprint arXiv:2101.08778}, 2022.
 \url{https://arxiv.org/abs/2101.08778}.
 
 \bibitem{lamport1982}
@@ -2765,11 +2759,6 @@ G. Wood,
 Ethereum Foundation, 2014.
 \url{https://ethereum.github.io/yellowpaper/paper.pdf}.
 
-\bibitem{eigenphi}
-EigenPhi,
-\textit{Piattaforma di analisi MEV su Ethereum},
-\url{https://eigenphi.io}, consultata maggio~2026.
-
 \bibitem{babel2023}
 K. Babel, P. Daian, M. Kelkar, A. Juels,
 ``Clockwork Finance: Automated Analysis of Economic Security in Smart Contracts'',
@@ -2777,10 +2766,10 @@ K. Babel, P. Daian, M. Kelkar, A. Juels,
 \url{https://arxiv.org/abs/2109.04347}.
 
 \bibitem{oz2024}
-B. Öz, D. Dhaliwal, T. Thiery, P. Jovanovic,
+B. Öz, D. Sui, T. Thiery, F. Matthes,
 ``Who Wins Ethereum Block Building Auctions and Why?'',
-\textit{Proc.\ ACM Conference on Computer and Communications Security (CCS)}, 2024.
-\url{https://arxiv.org/abs/2310.04921}.
+\textit{Proc.\ Advances in Financial Technologies (AFT)}, 2024.
+\url{https://arxiv.org/abs/2407.13931}.
 
 \bibitem{flashbots}
 Flashbots,
