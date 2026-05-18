@@ -2174,8 +2174,9 @@ parziale non meritato. Il sistema privilegia deliberatamente la seconda tipologi
 è preferibile che qualche frode passi piuttosto che un utente onesto venga penalizzato. Il
 meccanismo di slashing e la blacklist pubblica dei bot introducono un disincentivo dinamico
 che riduce la profittabilità attesa delle frodi nel lungo periodo, ma non la azzerano. Il
-rischio residuo di perdite fraudolente è incorporato nella struttura del premio tramite il
-parametro $F_{max,BS}$ e nel dimensionamento del pool.
+rischio residuo di perdite fraudolente è incorporato nella struttura del premio e nel dimensionamento del pool.
+
+\vspace{-5mm}
 
 \paragraph{Necessità di un margine di solvibilità permanente.}
 Perché il sistema possa sempre onorare i payout, il pool assicurativo deve mantenere in
