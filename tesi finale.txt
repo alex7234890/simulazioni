@@ -281,7 +281,7 @@ Werner et al.\ hanno condotto una revisione sistematica dell'ecosistema DeFi,\fo
 M. Werner, D. Perez, L. Gudgeon, A. Klages-Mundt, D. Harz, W. J. Knottenbelt,
 ``SoK: Decentralized Finance (DeFi)'', \textit{Proc.\ ACM CCS Workshop on Decentralized
 Finance and Security}, 2022. \url{https://arxiv.org/abs/2101.08778}.} evidenziando come
-la mancanza di meccanismi di assicurazione per le perdite da MEV costituisca una lacuna
+la mancanza di meccanismi di protezione per le perdite da MEV costituisca una lacuna
 rilevante nell'ecosistema, data la loro alta frequenza e il loro impatto diretto sugli
 utenti retail.
 
@@ -460,8 +460,7 @@ High & 100\% della perdita & 1.00 \\
 \caption{Livelli di copertura assicurativa. Il rapporto tra $F_{cov}$ e percentuale di
 rimborso è sub-lineare (la copertura Low paga il 70\% del premio base per il 50\% di
 rimborso), incentivando la scelta di coperture più alte e riducendo il rischio di
-anti-selezione. Questo schema è analogo alla struttura di franchigie e coassicurazione
-nelle polizze assicurative tradizionali.}
+anti-selezione.}
 \end{table}
 
 \subsubsection{Progressione del Tier}
@@ -503,30 +502,47 @@ ufficiale Google reCAPTCHA.}
 
 \begin{figure}[H]
 \centering
+\begin{figure}[H]
+\centering
 \begin{tikzpicture}[
   tier/.style={rectangle, draw, thick, rounded corners=4pt, minimum width=2cm, minimum height=0.9cm, align=center, font=\small},
   arr/.style={->, thick, >=stealth}
 ]
+% Nodi dei Tier
 \node[tier, fill=orange!35] (br) at (0,0) {\textbf{Bronze}};
 \node[tier, fill=gray!35] (si) at (3.5,0) {\textbf{Silver}};
 \node[tier, fill=yellow!55] (go) at (7,0) {\textbf{Gold}};
-\node[tier, fill=cyan!30] (pl) at (10.5,0) {\textbf{Platinum}};
+\node[tier, fill=cyan!30] (pl) at (12.0,0) {\textbf{Platinum}};
 \node[tier, fill=red!35, minimum width=2.4cm] (bl) at (5.25,-2.8) {\textbf{Blacklist}};
 
+% 1. Percorsi di upgrade lineari (storico)
 \draw[arr, green!60!black] (br.east) -- node[above, font=\scriptsize]{storico} (si.west);
 \draw[arr, green!60!black] (si.east) -- node[above, font=\scriptsize]{storico} (go.west);
-\draw[arr, green!60!black] (go.east) -- node[above, font=\scriptsize]{\scriptsize stake+CAPTCHA} (pl.west);
 
+% 2. Frecce verdi unificate che vanno a Platinum da Bronze, Silver e Gold (passaggio aereo)
+\draw[thick, green!60!black] (br.north) -- ++(0,0.8) -| (pl.north);
+\draw[thick, green!60!black] (si.north) -- ++(0,0.8) -| (pl.north);
+\draw[arr, thick, green!60!black] (go.north) -- ++(0,0.8) -| (pl.north);
+% Label unico sopra la linea di sbarco comune
+\node[above, font=\scriptsize, green!60!black] at (9.5,1.25) {stake+CAPTCHA};
+
+% 3. Percorsi di degradazione a Blacklist (Red)
 \draw[arr, red!70!black] (br.south) |- (bl.west);
 \draw[arr, red!70!black] (si.south) -- (bl.north);
 \draw[arr, red!70!black] (go.south) |- (bl.east);
 \draw[arr, red!70!black] (pl.south) .. controls (10.5,-1.5) and (8.5,-2.8) .. (bl.east);
-\node[right, font=\scriptsize, red!80!black] at (bl.east) {\;FS $> \theta_{reject}$};
 
-\draw[->, dashed, thick, gray!70] (bl.south) -- ++(0,-0.6) |- (br.south);
-\node[below, font=\tiny, gray!60] at (2.5,-3.4) {saldo debito $\to$ riattivazione};
+% 4. Scritta rossa F_reject riposizionata più in basso rispetto al nodo Blacklist
+\node[right, font=\scriptsize, red!80!black] at ([yshift=-0.4cm]bl.east) {FS $> F_{reject}$};
+
+% 5. Freccia grigia DIRETTA da Blacklist a Bronze con scritta grigia subito sotto
+% (Disegnata da Bronze a Blacklist con il flag [<-] per mantenere il testo dritto da sinistra a destra)
+\draw[<-, dashed, thick, gray!70] (br.south) -- (bl.west) 
+  node[midway, below, sloped, font=\scriptsize, gray!60] {saldo debito $\to$ riattivazione};
+
 \end{tikzpicture}
-\caption{Progressione del tier. Gli upgrade automatici (frecce verdi) richiedono soglie di swap completati, giorni di attività e FraudScore medio; Gold→Platinum richiede stake e verifica CAPTCHA. Qualsiasi tier con FS $> \theta_{reject}$ viene spostato in Blacklist; il debito va saldato per la riattivazione.}
+\end{figure}
+\caption{Progressione del tier. Gli upgrade automatici (frecce verdi) richiedono soglie di swap completati, giorni di attività e FraudScore medio; per Platinum richiede stake e verifica CAPTCHA. Qualsiasi tier con FS $> \theta_{reject}$ viene spostato in Blacklist; il debito va saldato per la riattivazione.}
 \end{figure}
 
 \paragraph{Gestione Claim.}
@@ -617,9 +633,12 @@ di breve durata finalizzate a manipolare un singolo claim specifico.
 
 Il terzo è la \textbf{scalatura logaritmica dello stake minimo} in funzione del numero di
 oracle già attivi:
+\vspace{-16pt}
 \[
 \text{StakeRequired} = \text{BaseStake} \times \log(1 + N_{\text{oracle attivi}})
+\vspace{-16pt}
 \]
+
 Se lo stake fosse costante, un attaccante con budget $B$ potrebbe registrare
 $B/\text{stake}$ identità false a costo lineare. La funzione logaritmica aumenta il costo
 marginale di ogni nuova identità senza disincentivare eccessivamente gli oracle legittimi.
@@ -634,7 +653,7 @@ uint256 minStake = getMinimumStake(); // BaseStake * log(1 + N_attivi)
 require(msg.value >= minStake, "Insufficient stake");
 oracleData[msg.sender].status = OracleStatus.Pending; // attesa T_activation
 
-// Sorteggio: Fisher-Yates su seed derivato da block.prevrandao (RANDAO)
+// Sorteggio su seed derivato da block.prevrandao (RANDAO)
 uint256 idx = uint256(keccak256(abi.encodePacked(_seed, i))) % remaining;
 selected[i]   = eligible[idx];
 eligible[idx] = eligible[--remaining]; // swap-and-shrink
@@ -832,34 +851,56 @@ apporto diluisce il peso del gruppo originale.
 \]
 
 Il range complessivo è 0--130 punti (50 + 30 + 50), ottenuto dalla somma dei massimi
-delle tre componenti. Le soglie decisionali sono:
+delle tre componenti. Le soglie decisionali sono illustrate nella figura seguente:
 
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-  box/.style={rectangle, draw, thick, minimum width=3cm, minimum height=1cm, align=center, font=\small},
-  comp/.style={rectangle, draw, thick, fill=blue!15, minimum width=2.8cm, minimum height=1cm, align=center, font=\scriptsize},
+  box/.style={rectangle, draw, thick, minimum width=2.8cm, minimum height=0.9cm, align=center, font=\small},
+  comp/.style={rectangle, draw, thick, fill=blue!15, minimum width=2.6cm, minimum height=0.9cm, align=center, font=\scriptsize},
   arrow/.style={->, thick, >=stealth}
 ]
-\node[comp] (tier) at (0,0) {\textbf{Tier}\\$0\text{--}50$ pt};
-\node[comp, right=0.5cm of tier] (cr) {\textbf{Claim Rate}\\$0\text{--}30$ pt};
-\node[comp, right=0.5cm of cr] (net) {\textbf{Network BFS}\\$0\text{--}50$ pt};
 
-\node[box, fill=orange!20, right=1.5cm of net] (fs) {\textbf{FraudScore}\\$0\text{--}130$};
+% --- COLONNA CENTRALE: COMPONENTI (Disposti in verticale con spaziature ridotte) ---
+\node[comp] (cr) at (0,0) {\textbf{Claim Rate}\\$0\text{--}30$ pt};
+\node[comp, above=1.1cm of cr] (tier) {\textbf{Tier}\\$0\text{--}50$ pt};
+\node[comp, below=1.1cm of cr] (net) {\textbf{Network BFS}\\$0\text{--}50$ pt};
 
-\draw[arrow] (tier.east) -- (fs.north west);
-\draw[arrow] (cr.east) -- (fs.west);
-\draw[arrow] (net.east) -- (fs.south west);
+% --- COLONNA SINISTRA: LEGENDE DEDICATE (Avvicinate a 0.4cm) ---
+\node[left=0.4cm of tier, font=\tiny, text width=2.6cm, align=center] (tl) {
+  Platinum=0\\Gold=15\\Silver=30\\Bronze=50
+};
+\node[left=0.4cm of cr, font=\tiny, text width=2.6cm, align=center] (crl) {
+  $<6\%$: 0\\$<10\%$: 15\\$<20\%$: 20\\$<30\%$: 25\\$\geq30\%$: 30
+};
+\node[left=0.4cm of net, font=\tiny, text width=2.6cm, align=center] (nl) {
+  d=0: 0\\d=1: 50\\d=2: 30\\d=3: 15\\$d\geq4$: $\max(5,16-d)$
+};
 
-\node[below=1.8cm of tier, font=\scriptsize, text width=2.8cm, align=center] (tl) {Platinum=0\\Gold=15\\Silver=30\\Bronze=50};
-\node[below=1.8cm of cr, font=\scriptsize, text width=2.8cm, align=center] (crl) {$<6\%$: 0\\$<10\%$: 15\\$<20\%$: 20\\$<30\%$: 25\\$\geq30\%$: 30};
-\node[below=1.8cm of net, font=\scriptsize, text width=2.8cm, align=center] (nl) {d=0: 0\\d=1: 50\\d=2: 30\\d=3: 15\\$d\geq4$: $\max(5,16-d)$};
+% Linee tratteggiate di collegamento alle legende
+\draw[dashed, gray!70] (tier.west) -- (tl.east);
+\draw[dashed, gray!70] (cr.west) -- (crl.east);
+\draw[dashed, gray!70] (net.west) -- (nl.east);
 
-\draw[dashed] (tier.south) -- (tl.north);
-\draw[dashed] (cr.south) -- (crl.north);
-\draw[dashed] (net.south) -- (nl.north);
+% --- COLONNA DESTRA: RISULTATO E SOGLIE (Avvicinata a 2.5cm) ---
+\node[box, fill=orange!20, right=2.5cm of cr] (fs) {\textbf{FraudScore}\\$0\text{--}130$};
 
-\node[below=0.4cm of fs, font=\scriptsize, text width=2.8cm, align=center, fill=green!10, draw] {$<\theta_{app}$: OK\\$\theta_{app}\text{--}\theta_{rej}$: CAPTCHA\\$>\theta_{rej}$: BLACKLIST};
+\node[below=0.5cm of fs, font=\scriptsize, text width=2.8cm, align=center, fill=green!10, draw] (fs_thresh) {
+  $<\theta_{app}$: OK\\$\theta_{app}\text{--}\theta_{rej}$: CAPTCHA\\$>\theta_{rej}$: BLACKLIST
+};
+
+% --- CONNESSIONI CON UNIFICAZIONE DELLE FRECCE (Tridente ottimizzato) ---
+% Il punto di giunzione è ora a 1.1cm a est di cr
+\path (cr.east) -- ++(1.1,0) coordinate (merge);
+
+% I tre segmenti che convergono nel punto di giunzione
+\draw[thick] (cr.east) -- (merge);
+\draw[thick] (tier.east) -| (merge);
+\draw[thick] (net.east) -| (merge);
+
+% L'unica freccia finale che va dal punto di giunzione al FraudScore
+\draw[arrow] (merge) -- (fs.west);
+
 \end{tikzpicture}
 \caption{Componenti del FraudScore e soglie decisionali ($\theta_{approve} = 60$, $\theta_{reject} = 80$).}
 \end{figure}
@@ -989,9 +1030,7 @@ L'oracle riceve un reward fisso $R_{claim}$ per ogni claim valutato, indipendent
 dall'esito. Il costo è lo stake bloccato e i costi operativi del nodo. Il rischio è lo
 slashing parziale o totale dello stake in caso di comportamento disonesto. I reward sono
 strutturalmente indipendenti dall'importo di slashing eventualmente applicato, eliminando
-ogni incentivo a favorire slashing eccessivi o ingiustificati. Come riferimento, un sistema
-con 100 claim al giorno e $N_{oracle,claim} = 7$ oracle per claim genera un costo di
-$100 \times 7 \times R_{claim}$ in reward giornalieri.
+ogni incentivo a favorire slashing eccessivi o ingiustificati.
 
 %========================================================================
 \newpage
