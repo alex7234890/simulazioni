@@ -1208,8 +1208,7 @@ I parametri della formula sono i seguenti:
 \textbf{$V$} è il valore dello swap da assicurare in ETH.
 
 \textbf{$P_{att}$} è la percentuale di attacchi sandwich sul mercato, calcolata su dati
-on-chain pubblici. Secondo Chi et al.\ (arXiv:2405.17944, 2024), $P_{att}$ si
-attesta nell'ordine del 2--5\%, con picchi fino al 10\% in periodi di alta attività MEV.
+on-chain pubblici.
 $P_{att}$ viene aggiornato ogni 24 ore tramite un meccanismo decentralizzato descritto
 nel paragrafo successivo.
 
@@ -1218,7 +1217,7 @@ estraggono fino al 95\% dello slippage tolerance impostato dall'utente; con toll
 tipiche dell'1--3\% per coppie volatili e dello 0.1--0.5\% per stablecoin, la perdita
 media si colloca tipicamente nell'intervallo 0.5--3\%. Il default conservativo
 $L\% = 0.25$ (25\%) copre scenari di swap con alta tolleranza di slippage o bassa
-liquidità di pool, rappresentando un upper bound prudenziale.
+liquidità di pool, rappresentando un upper bound prudenziale, ma viene continuamente aggiornato attraverso i dati forniti dagli oracle rispetto alla percentuale media di rimborsi effettuati a causa di attacchi.
 
 \textbf{$T_{int}$}, \textbf{$E$} e \textbf{$V_{base}$} governano la componente di costo
 delle frodi non intercettate. $T_{int}$ è il valore totale in ETH delle frodi intercettate
@@ -1574,7 +1573,6 @@ La simulazione è stata eseguita con 7 oracle, 1 bot attaccante (sandwich) e 10 
 di cui 5 dotati di copertura \texttt{HIGH} e 5 privi di copertura (\textit{naked}). Il
 pool AMM è stato inizializzato con \num{5000}~MEVI e \num{5000}~USDC; il pool assicurativo
 è partito da \num{50}~MEVI. Il numero complessivo di swap eseguiti è pari a \num{13212}.
-Lo scenario corrisponde al caso~2.1 (\textit{5 insured vs 5 naked --- attack rate 10\,\%}).
 
 La sessione ha avuto inizio alle ore 01:18 e si è conclusa alle ore 11:47, per una durata
 complessiva di circa dieci ore e ventinove minuti. Poiché ogni minuto reale corrispondeva
@@ -1586,26 +1584,47 @@ realistico di operazioni sul pool AMM per l'intera durata della simulazione.
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-  box/.style={rectangle, draw, thick, rounded corners=3pt, minimum width=3cm, minimum height=0.85cm, align=center, font=\scriptsize},
-  arr/.style={->, thick, >=stealth}
+  box/.style={rectangle, draw, thick, rounded corners=3pt, minimum width=3cm,
+              minimum height=0.85cm, align=center, font=\scriptsize},
+  arr/.style={->, thick, >=stealth},
+  biarr/.style={<->, thick, >=stealth},
+  lbl/.style={font=\tiny}
 ]
-\node[box, fill=yellow!30, minimum width=4cm, font=\small] (sc) at (0,0) {\textbf{Smart Contract}};
-\node[box, fill=cyan!15] (amm) at (-4.2,2.2) {AMM Pool\\5000 MEVI/USDC};
-\node[box, fill=green!20] (ins) at (4.2,2.2) {Pool Assicurativo\\50\,{\small →}\,80{,}62 MEVI};
-\node[box, fill=blue!15] (tins) at (-4.2,-2) {5 Trader HIGH\\vol.\ 398k MEVI};
-\node[box, fill=gray!25] (tnak) at (4.2,-2) {5 Trader Naked\\vol.\ 585k MEVI};
-\node[box, fill=orange!20] (orac) at (0,-2) {7 Oracle\\verifica claim};
-\node[box, fill=red!25] (bot) at (0,-4.2) {MEV Bot\\1129 attacchi sandwich};
+% --- Nodi ---
+\node[box, fill=yellow!30, minimum width=3.8cm, font=\small] (sc)    at ( 0  , 0)    {\textbf{Smart Contract}};
+\node[box, fill=cyan!15]                                     (amm)   at (-5  , 3)    {AMM Pool\\5000 MEVI/USDC};
+% Spostato Pool Assicurativo a sinistra (X=2.5) per evitare la freccia del Naked trader
+\node[box, fill=green!20]                                    (ins)   at ( 2.5 , 3)    {Pool Assicurativo\\50\,$\to$\,80{,}62 MEVI};
+\node[box, fill=blue!15]                                     (thigh) at (-5  ,-2.7)  {5 Trader HIGH\\vol.\ 398k MEVI};
+\node[box, fill=gray!25]                                     (tnak)  at ( 5  ,-2.7)  {5 Trader Naked\\vol.\ 585k MEVI};
+\node[box, fill=orange!20]                                   (orac)  at ( 0  ,-2.7)  {7 Oracle\\verifica claim};
+\node[box, fill=red!25]                                      (bot)   at ( 0  ,-5.2)  {MEV Bot\\1129 attacchi sandwich};
 
-\draw[arr, cyan!60!black] (amm.south) -- node[left, font=\tiny]{dati prezzi} (sc.north west);
-\draw[arr, green!60!black] (sc.north east) -- node[right, font=\tiny]{riserva} (ins.south);
-\draw[<->, thick, >=stealth, blue!60!black] (tins.north east) -- node[above, font=\tiny, sloped]{premi/claim/payout} (sc.south west);
-\draw[arr, gray!60!black] (tnak.north west) -- node[above, font=\tiny, sloped]{swap} (sc.south east);
-\draw[arr] (orac.north) -- node[right, font=\tiny]{verdetti FraudScore} (sc.south);
-\draw[arr, red!70!black] (bot.north west) -- node[left, font=\tiny]{attacca} (tins.south);
-\draw[arr, red!70!black] (bot.north east) -- node[right, font=\tiny]{attacca} (tnak.south);
+% --- Archi ---
+% AMM -> SC : dati prezzi (lo SC legge il prezzo dall'AMM)
+\draw[arr, cyan!60!black] (amm.south east) -- node[lbl, above, sloped]{dati prezzi} (sc.north west);
+% SC -> Pool Assicurativo : riserva (calcolo automatico dell'intersezione tra i nodi)
+\draw[arr, green!60!black] (sc) -- node[lbl, above, sloped]{riserva} (ins);
+% Oracle -> SC : verdetti
+\draw[arr, orange!80!black] (orac.north) -- node[lbl, right]{verdetti FraudScore} (sc.south);
+% Trader HIGH <-> SC : premi / claim / payout
+\draw[biarr, violet!80!black] (thigh.north east) --
+      node[lbl, above, sloped, pos=0.55]{premi / claim / payout}
+      (sc.south west);
+% Trader HIGH -> AMM : swap (gli HIGH usano anche l'AMM)
+\draw[arr, blue!70!black] (thigh.north) -- node[lbl, left]{swap} (amm.south);
+% Trader Naked -> AMM : swap (ora la retta verticale a X=5 è perfettamente libera)
+\draw[arr, gray!50!black, rounded corners=8pt]
+      (tnak.north) -- (5,4.2) -- node[lbl, above]{swap} (-5,4.2) -- (amm.north);
+% MEV Bot -> trader : attacca
+\draw[arr, red!70!black] (bot.north west) -- node[lbl, above, sloped]{attacca} (thigh.south east);
+\draw[arr, red!70!black] (bot.north east) -- node[lbl, above, sloped]{attacca} (tnak.south west);
 \end{tikzpicture}
-\caption{Architettura della simulazione: 629~giorni, 13.212~swap totali, tasso di attacco effettivo 8,55\,\%. I trader assicurati (HIGH) interagiscono con lo smart contract con flusso bidirezionale (premi/claim/payout); i naked non ricevono rimborsi.}
+\caption{Architettura della simulazione MEV Insurance. I trader \emph{naked} interagiscono unicamente con l'AMM; i trader \emph{HIGH} (assicurati) interagiscono sia con l'AMM (per gli swap) sia con lo Smart Contract (per premi, claim e payout).}
+\label{fig:architettura-simulazione}
+\end{figure}
+\caption{Architettura della simulazione MEV Insurance. I trader \emph{naked} interagiscono unicamente con l'AMM; i trader \emph{HIGH} (assicurati) interagiscono sia con l'AMM (per gli swap) sia con lo Smart Contract (per premi, claim e payout).}
+\label{fig:architettura-simulazione}
 \end{figure}
 
 \subsection{Attività dell'Attaccante}
@@ -1618,9 +1637,7 @@ attaccato è dunque
 \]
 Considerando il volume totale degli swap pari a \num{983515,22}~MEVI, corrispondente ad
 uno swap medio di \num{74,44}~MEVI, la perdita media per attacco rappresenta il
-\num{4,73}\,\% del valore della singola transazione. Il dato è coerente con le stime
-empiriche della letteratura MEV, che collocano la perdita tipica da sandwich nell'ordine
-dell'1--5\% del valore della transazione.
+\num{4,73}\,\% del valore della singola transazione. 
 
 \subsection{Riepilogo per Trader}
 
@@ -2009,21 +2026,24 @@ i casi il gas è incluso nella transazione dell'ultimo chiamante.
 \hline
 \textbf{Operazione} & \textbf{Gas stimato} & \textbf{Chi paga} \\
 \hline
-\texttt{submitClaim} (3 hash + storage) & $\sim$100.000 & Utente \\
+\texttt{submitClaim} (3 hash + storage) & $\sim$100.000 gas & Utente \\
 \hline
-$7 \times$ \texttt{commit} (hash + storage write) & $\sim$420.000 & Oracle ($\times$7) \\
+$7 \times$ \texttt{commit} (hash + storage write) & $\sim$420.000 gas & Oracle ($\times$7) \\
 \hline
-$7 \times$ \texttt{reveal} (verifica + storage) & $\sim$700.000 & Oracle ($\times$7) \\
+$7 \times$ \texttt{reveal} (verifica + storage) & $\sim$700.000 gas & Oracle ($\times$7) \\
 \hline
-Calcolo mediana + decisione & $\sim$150.000 & Incluso in reveal \\
+Calcolo mediana + decisione & $\sim$150.000 gas & Incluso in reveal \\
 \hline
-CAPTCHA (eventuale) & $\sim$50.000 & Oracle \\
+CAPTCHA (eventuale) & $\sim$50.000 gas & Oracle \\
 \hline
-Payout (trasferimento ETH) & $\sim$50.000 & Incluso in finalizzazione \\
+Payout (trasferimento ETH) & $\sim$50.000 gas & Incluso in finalizzazione \\
 \hline
-\textbf{Totale ciclo} & $\sim$\textbf{1.470.000} & \\
+\textbf{Totale ciclo} & $\sim$\textbf{1.470.000 gas} & \\
 \hline
 \end{tabular}
+\caption{Stima del gas per un ciclo completo di valutazione claim con $N_{\text{oracle}} = 7$. Stime basate su operazioni Solidity tipiche (storage write $\sim$20.000 gas, event emit $\sim$2.000 gas, keccak256 $\sim$30 gas, SLOAD $\sim$2.100 gas).}
+\label{tab:gas-ciclo-claim}
+\end{table}
 \caption{Stima del gas per un ciclo completo di valutazione claim con $N_{oracle} = 7$.
 Stime basate su operazioni Solidity tipiche (storage write $\sim$20.000 gas,
 \texttt{keccak256} $\sim$30 gas, SLOAD $\sim$2.100 gas).}
@@ -2076,7 +2096,9 @@ Con il gas attuale (0.2 Gwei) il costo per il pool è zero.}
 \label{tab:gas-oracle-impact}
 \end{table}
 
+\vspace{-5mm}
 \subsection{Soglia Minima di Valore Swap}
+\vspace{-3mm}
 
 Affinché il sistema sia economicamente sensato per l'utente, il gas pagato per
 \texttt{submitClaim} ($\sim$100.000 gas) non deve superare il premio pagato.
@@ -2149,8 +2171,9 @@ parziale non meritato. Il sistema privilegia deliberatamente la seconda tipologi
 è preferibile che qualche frode passi piuttosto che un utente onesto venga penalizzato. Il
 meccanismo di slashing e la blacklist pubblica dei bot introducono un disincentivo dinamico
 che riduce la profittabilità attesa delle frodi nel lungo periodo, ma non la azzerano. Il
-rischio residuo di perdite fraudolente è incorporato nella struttura del premio tramite il
-parametro $F_{max,BS}$ e nel dimensionamento del pool.
+rischio residuo di perdite fraudolente è incorporato nella struttura del premio e nel dimensionamento del pool.
+
+\vspace{-5mm}
 
 \paragraph{Necessità di un margine di solvibilità permanente.}
 Perché il sistema possa sempre onorare i payout, il pool assicurativo deve mantenere in
@@ -2263,23 +2286,23 @@ distribuisce i reward fissi agli oracle partecipanti.
   node[midway, above, font=\scriptsize] {1. submitClaim(tx1,tx2,tx3)};
 
 \node[draw, fill=yellow!20, text width=2.8cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-1.5)$) {2. Verify policy exists\\Check claim format};
+  at ($(sc.south)+(0,-1.2)$) {2. Verify policy exists\\Check claim format};
 
 \node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-2.8)$) {3. RANDAO\\select N oracle};
+  at ($(sc.south)+(0,-2.3)$) {3. RANDAO\\select N oracle};
 
-\draw[->, thick, blue] ($(sc.south)+(0,-3.8)$) -- ($(oracle.south)+(0,-3.8)$)
+\draw[->, thick, blue] ($(sc.south)+(0,-3.3)$) -- ($(oracle.south)+(0,-3.3)$)
   node[midway, above, font=\scriptsize] {4. notify(claimID)};
 
 \node[draw, fill=cyan!20, text width=3.2cm, align=center, font=\scriptsize]
-  at ($(oracle.south)+(0,-5.2)$) {5. OFF-CHAIN:\\Fetch 3 TX\\Verify sandwich pattern\\Calc real loss\\FraudScore};
+  at ($(oracle.south)+(0,-4.7)$) {5. OFF-CHAIN:\\Fetch 3 TX\\Verify sandwich pattern\\Calc real loss\\FraudScore};
 
 \draw[->, thick, green] ($(oracle.south)+(0,-6.8)$) -- ($(sc.south)+(0,-6.8)$)
   node[midway, above, font=\scriptsize, align=center] {6. submitVerdict(score) \\ {[commit-reveal protocol]}};
 
 
 \node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-7.8)$) {7. Calc median\\of scores};
+  at ($(sc.south)+(0,-7.6)$) {7. Calc median\\of scores};
 
 \node[draw, fill=pink!20, text width=5.5cm, align=left, font=\scriptsize]
   at ($(sc.south)+(0.4,-10)$) {
@@ -2293,13 +2316,13 @@ distribuisce i reward fissi agli oracle partecipanti.
     \quad score $> \theta_{reject}$ $\rightarrow$ BLACKLIST
   };
 
-\draw[->, thick, red] ($(sc.south)+(0,-12.2)$) -- ($(oracle.south)+(0,-12.2)$)
+\draw[->, thick, red] ($(sc.south)+(0,-12.35)$) -- ($(oracle.south)+(0,-12.35)$)
   node[midway, above, font=\scriptsize] {9. requestCAPTCHA()};
 
 \node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
   at ($(oracle.south)+(0,-13.2)$) {10. Verify\\CAPTCHA token\\(off-chain)};
 
-\draw[->, thick, green] ($(oracle.south)+(0,-14.2)$) -- ($(sc.south)+(0,-14.2)$)
+\draw[->, thick, green] ($(oracle.south)+(0,-14.35)$) -- ($(sc.south)+(0,-14.35)$)
   node[midway, above, font=\scriptsize] {11. verdictCAPTCHA};
 
 \node[draw, fill=pink!20, text width=3cm, align=center, font=\scriptsize]
@@ -2345,12 +2368,12 @@ distribuisce i reward fissi agli oracle partecipanti.
   node[midway, above, font=\scriptsize] {2. depositStake($C_{report}$)};
 
 \node[draw, fill=yellow!20, text width=2.2cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-2.2)$) {3. Validate:\\TX real, format OK};
+  at ($(sc.south)+(0,-1.9)$) {3. Validate:\\TX real, format OK};
 
 \node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
   at ($(sc.south)+(0,-3.3)$) {4. RANDAO select\\$N_{jury}$ oracle\\(not in watchlist)};
 
-\draw[->, thick, blue] ($(sc.south)+(0,-4.3)$) -- ($(jury.south)+(0,-4.3)$)
+\draw[->, thick, blue] ($(sc.south)+(0,-4.42)$) -- ($(jury.south)+(0,-4.42)$)
   node[midway, above, font=\scriptsize] {5. notify(reportID)};
 
 \node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
@@ -2362,7 +2385,7 @@ distribuisce i reward fissi agli oracle partecipanti.
 
 
 \node[draw, fill=yellow!20, text width=2.2cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-7.5)$) {8. Calc median\\of $N_{jury}$ votes};
+  at ($(sc.south)+(0,-7.1)$) {8. Calc median\\of $N_{jury}$ votes};
 
 \node[draw, fill=pink!20, text width=5cm, align=left, font=\scriptsize]
   at ($(sc.south)+(0.3,-9.2)$) {
@@ -2373,7 +2396,7 @@ distribuisce i reward fissi agli oracle partecipanti.
     No reintegro: blacklist
   };
 
-\draw[->, thick, red] ($(sc.south)+(0,-10.7)$) -- ($(rep.south)+(0,-10.7)$)
+\draw[->, thick, red] ($(sc.south)+(0,-11.2)$) -- ($(rep.south)+(0,-11.2)$)
   node[midway, above, font=\scriptsize] {10a. If med=0: lose stake};
 
 \draw[->, thick, orange] ($(sc.south)+(0,-11.4)$) -- ($(acc.south)+(0,-11.4)$)
@@ -2429,29 +2452,29 @@ distribuisce i reward fissi agli oracle partecipanti.
   node[midway, above, font=\scriptsize] {1. submitClaim(tx1,tx2,tx3)};
 
 \node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-1.3)$) {2. RANDAO\\select N oracle};
+  at ($(sc.south)+(0,-1.1)$) {2. RANDAO\\select N oracle};
 
-\draw[->, thick, blue] ($(sc.south)+(0,-2.1)$) -- ($(oracle.south)+(0,-2.1)$)
+\draw[->, thick, blue] ($(sc.south)+(0,-1.95)$) -- ($(oracle.south)+(0,-1.95)$)
   node[midway, above, font=\scriptsize] {3. notify(claimID)};
 
-\draw[->, thick, red] ($(oracle.south)+(0,-2.8)$) -- ($(chain.south)+(0,-2.8)$)
+\draw[->, thick, red] ($(oracle.south)+(0,-2.5)$) -- ($(chain.south)+(0,-2.5)$)
   node[midway, above, font=\scriptsize] {4. fetchTx(hash1,2,3)};
 
-\draw[<-, thick, red] ($(oracle.south)+(0,-3.4)$) -- ($(chain.south)+(0,-3.4)$)
-  node[midway, below, font=\scriptsize] {5. TX details};
+\draw[<-, thick, red] ($(oracle.south)+(0,-3.0)$) -- ($(chain.south)+(0,-3.0)$)
+  node[midway, above, font=\scriptsize] {5. TX details};
 
 \node[draw, fill=cyan!20, text width=2.8cm, align=center, font=\scriptsize]
-  at ($(oracle.south)+(0,-4.3)$) {6. Verify\\sandwich pattern};
+  at ($(oracle.south)+(0,-3.9)$) {6. Verify\\sandwich pattern};
 
 \node[draw, fill=pink!20, text width=3.5cm, align=left, font=\scriptsize]
-  at ($(oracle.south)+(0,-5.4)$) {
+  at ($(oracle.south)+(0,-5.1)$) {
     \textbf{7. If pattern invalid:}\\
     \quad submitVerdict(REJECT)\\
     \quad $\rightarrow$ END (no payout)
   };
 
 \node[draw, fill=cyan!20, text width=2.5cm, align=center, font=\scriptsize]
-  at ($(oracle.south)+(0,-6.5)$) {8. If valid:\\Calculate real loss};
+  at ($(oracle.south)+(0,-6.3)$) {8. If valid:\\Calculate real loss};
 
 \node[draw, fill=yellow!20, text width=3.2cm, align=left, font=\tiny]
   at ($(oracle.south)+(0,-7.7)$) {
@@ -2462,11 +2485,11 @@ distribuisce i reward fissi agli oracle partecipanti.
     Total: 0-130
   };
 
-\draw[->, thick, green] ($(oracle.south)+(0,-8.8)$) -- ($(sc.south)+(0,-8.8)$)
+\draw[->, thick, green] ($(oracle.south)+(0,-9)$) -- ($(sc.south)+(0,-9)$)
   node[midway, above, font=\scriptsize] {10. submitVerdict(score, sig)};
 
 \node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-9.7)$) {11. Verify\\signature};
+  at ($(sc.south)+(0,-9.6)$) {11. Verify\\signature};
 
 \node[draw, fill=yellow!20, text width=2.5cm, align=center, font=\scriptsize]
   at ($(sc.south)+(0,-10.6)$) {12. Calculate\\median of scores};
@@ -2475,19 +2498,19 @@ distribuisce i reward fissi agli oracle partecipanti.
   at ($(sc.south)+(0,-11.6)$) {13. Calc scostamento:\\$|$score - median$|$};
 
 \node[draw, fill=yellow!20, text width=2.8cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-12.6)$) {14. Update oracle\\cumulative score};
+  at ($(sc.south)+(0,-12.45)$) {14. Update oracle};
 
 \node[draw, fill=pink!20, text width=3.5cm, align=center, font=\scriptsize]
   at ($(sc.south)+(0,-13.7)$) {15. Check watchlist:\\If $k_{watchlist}\times$ scost. $\geq \Delta_{watchlist}$\\add to watchlist};
 
 \node[draw, fill=green!20, text width=3cm, align=left, font=\scriptsize]
-  at ($(sc.south)+(0,-14.8)$) {
+  at ($(sc.south)+(0,-15.3)$) {
     \textbf{16. Reward fisso:}\\
     $R_{claim}$ per oracle\\
     (indipendente da scost.)
   };
 
-\draw[->, thick, green] ($(sc.south)+(0,-15.8)$) -- ($(oracle.south)+(0,-15.8)$)
+\draw[->, thick, green] ($(sc.south)+(0,-16.5)$) -- ($(oracle.south)+(0,-16.5)$)
   node[midway, above, font=\scriptsize] {17. reward ($R_{claim}$)};
 
 \end{tikzpicture}
@@ -2522,14 +2545,14 @@ distribuisce i reward fissi agli oracle partecipanti.
   };
 
 \node[draw, fill=pink!20, text width=3.5cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-3.3)$) {
+  at ($(sc.south)+(0,-3.60)$) {
     \textbf{3. If limits exceeded:}\\
     Notify user\\
     $\rightarrow$ END
   };
 
 \node[draw, fill=cyan!20, text width=4cm, align=left, font=\scriptsize]
-  at ($(sc.south)+(0,-4.7)$) {
+  at ($(sc.south)+(0,-5.3)$) {
     \textbf{4. Consult storage metrics:}\\
     P\_att (attack rate last 2d)\\
     T\_int (fraud intercepted 24h, ETH)\\
@@ -2537,14 +2560,14 @@ distribuisce i reward fissi agli oracle partecipanti.
     V\_base (swaps 24h)
   };
 
-\draw[->, thick, purple] ($(sc.south)+(0,-6.0)$) -- ($(pool.south)+(0,-6.0)$)
+\draw[->, thick, purple] ($(sc.south)+(0,-7.1)$) -- ($(pool.south)+(0,-7.1)$)
   node[midway, above, font=\scriptsize] {5. getSolvencyRatio()};
 
-\draw[<-, thick, purple] ($(sc.south)+(0,-6.7)$) -- ($(pool.south)+(0,-6.7)$)
-  node[midway, below, font=\scriptsize] {SR};
+\draw[<-, thick, purple] ($(sc.south)+(0,-7.65)$) -- ($(pool.south)+(0,-7.65)$)
+  node[midway, above, font=\scriptsize] {SR};
 
 \node[draw, fill=cyan!30, text width=6.5cm, align=left, font=\scriptsize]
-  at ($(sc.south)+(0,-8.2)$) {
+  at ($(sc.south)+(0,-9)$) {
     \textbf{6. Calculate $M_{adj}$:}\\[2pt]
     \quad SR $\geq SR_{safe}$ $\rightarrow$ $M_{adj}$ = 0.00\\
     \quad $SR_{critical} \leq$ SR $< SR_{safe}$ $\rightarrow$ $M_{adj} = \Delta M_{med}$\\
@@ -2552,7 +2575,7 @@ distribuisce i reward fissi agli oracle partecipanti.
   };
 
 \node[draw, fill=green!30, text width=4.8cm, align=left, font=\scriptsize]
-  at ($(sc.south)+(0,-10.0)$) {
+  at ($(sc.south)+(0,-11.0)$) {
     \textbf{7. Set $F_{cov}$ (coverage factor):}\\[2pt]
     \quad Low (50\% reimb) $\rightarrow$ $F_{cov}$ = 0.70\\
     \quad Med (70\% reimb) $\rightarrow$ $F_{cov}$ = 0.90\\
@@ -2560,15 +2583,15 @@ distribuisce i reward fissi agli oracle partecipanti.
   };
 
 \node[draw, fill=orange!30, text width=12.8cm, align=center, font=\scriptsize, inner sep=5pt]
-  at ($(sc.south)+(0.4,-12.2)$) {
+  at ($(sc.south)+(0.4,-12.8)$) {
     \textbf{8. Apply premium formula:}\\[4pt]
     $P = \max \left( V \times \left[ (P_{att} \times L\%) + \frac{T_{int} \times E/(1-E) + C_{oracle,24h}}{V_{base}} \right] \times (1 + M_{base} + M_{adj}) \times F_{cov} , \;\; P_{min} \times V \right)$
   };
 
 \draw[->, thick, green] ($(sc.south)+(0,-13.8)$) -- ($(user.south)+(0,-13.8)$)
-  node[midway, above, font=\scriptsize] {9. quote = Premium};
+  node[midway, below, font=\scriptsize] {9. quote = Premium};
 
-\draw[->, thick, blue] ($(user.south)+(0,-14.6)$) -- ($(sc.south)+(0,-14.6)$)
+\draw[->, thick, blue] ($(user.south)+(0,-14.8)$) -- ($(sc.south)+(0,-14.8)$)
   node[midway, above, font=\scriptsize] {10. buyPolicy() + pay(P)};
 
 \node[draw, fill=yellow!20, text width=3.5cm, align=center, font=\scriptsize]
@@ -2607,13 +2630,13 @@ distribuisce i reward fissi agli oracle partecipanti.
 \draw[thick, gray] (pool.south) -- ++(0,-17cm);
 
 \node[draw, fill=gray!30, text width=8cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(2.5,-0.8)$) {\textbf{AUTOMATICO: Bronze$\rightarrow$Silver / Silver$\rightarrow$Gold}};
+  at ($(sc.south)+(2.5,-0.5)$) {\textbf{AUTOMATICO: Bronze$\rightarrow$Silver / Silver$\rightarrow$Gold}};
 
 \node[draw, fill=cyan!20, text width=3cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-1.8)$) {1. Controllo periodico\\(24h o ogni swap)};
+  at ($(sc.south)+(0,-1.3)$) {1. Controllo periodico\\(24h o ogni swap)};
 
 \node[draw, fill=yellow!20, text width=3.5cm, align=left, font=\scriptsize]
-  at ($(sc.south)+(0,-3.2)$) {
+  at ($(sc.south)+(0,-2.7)$) {
     2. Verifica statistiche:\\
     swaps\_done\\
     days\_active\\
@@ -2628,9 +2651,9 @@ distribuisce i reward fissi agli oracle partecipanti.
   };
 
 \node[draw, fill=green!20, text width=2.5cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-6.2)$) {4. Se OK:\\Upgrade automatico};
+  at ($(sc.south)+(0,-6.5)$) {4. Se OK:\\Upgrade automatico};
 
-\draw[->, thick, green] ($(sc.south)+(0,-7.2)$) -- ($(user.south)+(0,-7.2)$)
+\draw[->, thick, green] ($(sc.south)+(0,-7.5)$) -- ($(user.south)+(0,-7.5)$)
   node[midway, above, font=\scriptsize] {5. notify(nuovo tier)};
 
 \node[draw, fill=gray!30, text width=8cm, align=center, font=\scriptsize]
@@ -2655,7 +2678,7 @@ distribuisce i reward fissi agli oracle partecipanti.
   node[midway, above, font=\scriptsize] {11. depositStake($\alpha_{stake} \times$ max)};
 
 \node[draw, fill=cyan!20, text width=3cm, align=center, font=\scriptsize]
-  at ($(sc.south)+(0,-14.8)$) {12. Calcolo:\\maxLimit = stake/$\alpha_{stake}$};
+  at ($(sc.south)+(0,-14.3)$) {12. Calcolo:\\maxLimit = stake/$\alpha_{stake}$};
 
 \node[draw, fill=green!20, text width=2.5cm, align=center, font=\scriptsize]
   at ($(sc.south)+(0,-15.8)$) {13. Upgrade\\Platinum};
