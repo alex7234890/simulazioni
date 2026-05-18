@@ -946,10 +946,12 @@ Il Claim Rate misura il rapporto tra claim sottomessi e swap totali assicurati:
 \[
 \text{Claim Rate} = \frac{\text{Total Claims}}{\text{Total Swap Assicurati}}
 \]
-Le soglie sono calibrate rispetto al tasso empirico di attacchi sandwich. Secondo i dati
-EigenPhi (novembre 2024 -- ottobre 2025), la frequenza di attacchi si attesta su
-60.000--90.000 al mese su volumi DEX mensili superiori a \$100 miliardi, con un Claim Rate
-di mercato nell'ordine del 2--5\%. Un claim rate individuale significativamente superiore
+Le soglie sono calibrate rispetto al tasso empirico di attacchi sandwich. Secondo
+Wang et al.\footnote{Y. Wang, Y. Chen, H. Wu, L. Zhou, S. Lent, R. Wattenhofer,
+``Remeasuring the Arbitrage and Sandwich Attacks of Maximal Extractable Value in
+Ethereum'', \textit{arXiv preprint arXiv:2405.17944}, 2024.
+\url{https://arxiv.org/abs/2405.17944}.}, il Claim Rate di mercato si attesta
+nell'ordine del 2--5\%. Un claim rate individuale significativamente superiore
 a $P_{att}$ è pertanto anomalo.
 
 \begin{table}[H]
@@ -1209,7 +1211,7 @@ I parametri della formula sono i seguenti:
 \textbf{$V$} è il valore dello swap da assicurare in ETH.
 
 \textbf{$P_{att}$} è la percentuale di attacchi sandwich sul mercato, calcolata su dati
-on-chain pubblici. Secondo dati EigenPhi (novembre 2024 -- ottobre 2025), $P_{att}$ si
+on-chain pubblici. Secondo Wang et al.\ (arXiv:2405.17944, 2024), $P_{att}$ si
 attesta nell'ordine del 2--5\%, con picchi fino al 10\% in periodi di alta attività MEV.
 $P_{att}$ viene aggiornato ogni 24 ore tramite un meccanismo decentralizzato descritto
 nel paragrafo successivo.
@@ -2641,6 +2643,13 @@ L. Zhou, K. Qin, C.~F. Torres, D.~V. Le, A. Gervais,
 ``High-Frequency Trading on Decentralized On-Chain Exchanges'',
 \textit{Proc.\ IEEE Symposium on Security and Privacy}, 2021.
 \url{https://arxiv.org/abs/2009.14021}.
+
+\bibitem{wang2024}
+Y. Wang, Y. Chen, H. Wu, L. Zhou, S. Lent, R. Wattenhofer,
+``Remeasuring the Arbitrage and Sandwich Attacks of Maximal Extractable Value
+in Ethereum'',
+\textit{arXiv preprint arXiv:2405.17944}, 2024.
+\url{https://arxiv.org/abs/2405.17944}.
 
 \bibitem{angeris2021}
 G. Angeris, H.-T. Kao, R. Chiang, C. Noyes, T. Chitra,
