@@ -2137,6 +2137,67 @@ ottimizzazioni introdotte da Ethereum con EIP-4844.\footnote{\url{https://eips.e
 
 %========================================================================
 \newpage
+\section{Limiti del Protocollo}
+%========================================================================
+
+Il protocollo MEV Insurance è progettato per offrire una compensazione economica misurabile
+e verificabile agli utenti colpiti da attacchi sandwich, ma è importante collocare questa
+garanzia entro i suoi confini reali. Tre limiti strutturali meritano una discussione
+esplicita.
+
+\paragraph{Intervento ex-post, non prevenzione.}
+Il sistema non è in grado di impedire che un attacco sandwich avvenga. Il bot MEV agisce
+nel momento in cui una transazione entra nel mempool e l'intera sequenza --- frontrun,
+victim, backrun --- si conclude nello stesso blocco o in blocchi consecutivi, in un arco
+temporale dell'ordine dei secondi che precede qualsiasi possibilità di intervento
+contrattuale. Il protocollo entra in gioco \emph{dopo} che il danno è già avvenuto: l'utente
+sottomette il claim, gli oracle verificano la firma on-chain e, se il pattern è valido, il
+pool eroga il rimborso. Questo significa che la perdita immediata sul singolo swap non può
+essere evitata; ciò che il sistema garantisce è che tale perdita sia quantificata e
+rimborsata in modo trasparente e decentralizzato. Per chi vuole proteggersi in forma
+preventiva esistono strumenti complementari --- come i relay privati Flashbots Protect o
+le pool con protezione MEV integrata --- che però comportano latenza aggiuntiva, dipendenza
+da infrastrutture centralizzate o fee supplementari. MEV Insurance si posiziona come
+alternativa economica e permissionless a questi strumenti, accettando la natura reattiva
+dell'intervento come trade-off consapevole.
+
+\paragraph{Imperfezione del sistema antifrode.}
+Il fraud detection descritto nella Sezione~\ref{sec:fraud-detection} è multi-livello e
+calibrato per minimizzare i falsi negativi (frodi non rilevate), ma nessun sistema di
+rilevazione statistica può offrire una garanzia assoluta. Esistono due tipi di errore
+speculari: un claim fraudolento sufficientemente sofisticato --- ad esempio distribuito su
+molti indirizzi a basso Claim Rate oppure orchestrato tra wallet che non hanno ancora
+accumulato connessioni nel grafo di rete --- potrebbe passare inosservato e ricevere un
+payout indebito. Di converso, un utente legittimo con un pattern insolito di swap potrebbe
+accumularsi uno Score Tier elevato e subire un ritardo nella liquidazione o un rimborso
+parziale non meritato. Il sistema privilegia deliberatamente la seconda tipologia di errore:
+è preferibile che qualche frode passi piuttosto che un utente onesto venga penalizzato. Il
+meccanismo di slashing e la blacklist pubblica dei bot introducono un disincentivo dinamico
+che riduce la profittabilità attesa delle frodi nel lungo periodo, ma non la azzerano. Il
+rischio residuo di perdite fraudolente è incorporato nella struttura del premio tramite il
+parametro $F_{max,BS}$ e nel dimensionamento del pool.
+
+\paragraph{Necessità di un margine di solvibilità permanente.}
+Perché il sistema possa sempre onorare i payout, il pool assicurativo deve mantenere in
+ogni momento riserve sufficienti a coprire il valore atteso dei claim aperti più un margine
+di sicurezza. Questo vincolo ha due implicazioni concrete. La prima è che una parte delle
+entrate --- premi e rendite da staking delle riserve --- non è distribuibile ai
+liquidity provider, ma deve rimanere nel pool come cuscinetto contro picchi di sinistrosità:
+periodi di alta attività MEV in cui il numero di claim legittimi supera le aspettative
+medie possono erodere le riserve più rapidamente di quanto i nuovi premi le ricostituiscano.
+La seconda implicazione riguarda la crescita: se la base assicurata cresce molto
+rapidamente senza un corrispondente afflusso di capitale nel pool, il protocollo deve
+temporaneamente limitare la vendita di nuove policy o aumentare i premi per preservare la
+solvibilità. Il monitoraggio continuo del rapporto tra riserve e volume assicurato ---
+analogo al \emph{minimum capital requirement} della regolamentazione assicurativa
+tradizionale --- è quindi una funzione critica del contratto, non un elemento accessorio.
+In sintesi, MEV Insurance non promette di eliminare il rischio MEV né di rilevare ogni
+tentativo di frode: promette di rendere prevedibile il costo atteso di quel rischio e di
+distribuirlo in modo efficiente tra chi sceglie di assicurarsi e chi sceglie di fungere
+da controparte fornendo liquidità al pool.
+
+%========================================================================
+\newpage
 \section{Diagrammi di Sequenza}
 %========================================================================
 
